@@ -19,7 +19,7 @@
         Hyphen joins letters in a word (no rest). Space marks a word boundary (inserts a rest). e.g. <code>SH-O-R-E K-T</code>
         <div class="input-highlight-wrap" title="Characters shown in red aren't recognized phonetic tokens (see README.md) -- a live preview of what play would flag/skip, so you can see the alphabet's actual sound coverage as you type instead of only after pressing play.">
           <div id="input-backdrop" class="input-backdrop" aria-hidden="true"></div>
-          <input id="input" type="text" value="I-K-T O" spellcheck="false" autocomplete="off" />
+          <input id="input" type="text" value="O-R-F-O-G-R-AE-F" spellcheck="false" autocomplete="off" />
         </div>
       </label>
 
@@ -51,7 +51,7 @@
       </div>
 
       <div class="row" title="'A cyclic pattern procession... cyclical transposition patterns... could drive this in a deliberate, grounded and self-resolving/musically satisfying way.' Advances the whole instrument's key center by the step below (mod 12) every time the GIVEN ring completes one full pass through the phrase -- at the default step of 7, this is literally the circle of fifths as a real-time process (visits all 12 positions, then resolves home). Shown live on the new outermost ring circumscribing the wheel. A different, decoupled layer from the step chain above -- this is a continuous real-time pitch offset, not a one-time structural transform.">
-        <label class="inline"><input type="checkbox" id="transposition-enabled" /> cyclic transposition</label>
+        <label class="inline"><input type="checkbox" id="transposition-enabled" checked /> cyclic transposition</label>
         <label class="inline">step (spokes)<input type="number" id="transposition-step" min="1" max="11" step="1" value="7" style="width: 48px;" /></label>
       </div>
 
@@ -238,6 +238,11 @@
 
           <div class="timbre-group-label">whole-tunnel breathing</div>
           <label title="how much every echo's radius pulsates with the drone's own real breath rate">breath pulsation<span class="rw"><input type="range" id="vp-breathPulseAmount" min="0" max="0.2" value="0.035" step="0.005" /><input type="number" id="vp-breathPulseAmount-n" min="0" max="0.2" value="0.035" step="0.005" /></span></label>
+
+          <div class="timbre-group-label">per-ring phase bar (the white timekeeping indicator)</div>
+          <label title="how wide the bar and its echoes are, in spokes">bar/echo width<span class="rw"><input type="range" id="vp-phaseBarArcWidth" min="0.05" max="1.5" value="0.4" step="0.05" /><input type="number" id="vp-phaseBarArcWidth-n" min="0.05" max="1.5" value="0.4" step="0.05" /></span></label>
+          <label title="how long each phase-bar echo lasts -- brief, so it stays subtle">echo life (ms)<span class="rw"><input type="range" id="vp-phaseBarEchoLife" min="100" max="3000" value="900" step="50" /><input type="number" id="vp-phaseBarEchoLife-n" min="100" max="3000" value="900" step="50" /></span></label>
+          <label title="lower = more subtle, less distracting from the main imagery">echo brightness<span class="rw"><input type="range" id="vp-phaseBarEchoStrength" min="0.02" max="1" value="0.3" step="0.02" /><input type="number" id="vp-phaseBarEchoStrength-n" min="0.02" max="1" value="0.3" step="0.02" /></span></label>
         </div>
       </details>
 

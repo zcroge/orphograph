@@ -46,7 +46,7 @@ const WHEEL_PALETTE = {
   emptySpokeNumber: "#726a58", // fallback spoke-number text on a truly empty spoke
 };
 
-import { SPOKE_COUNT, RINGS, spokePoint, isPole, rotateSpoke } from "./wheel.js";
+import { SPOKE_COUNT, RINGS, spokePoint, spokeAngle, isPole, rotateSpoke } from "./wheel.js";
 
 // "Granular parametric control over the visuals now, especially the echo
 // settings." Every number here has a real, currently-hardcoded twin
@@ -71,6 +71,12 @@ export const DEFAULT_VIEW_PARAMS = {
   echoReachIn: 0.92,
   echoFadeExponent: 1.7,         // >1 = "fade to black more gradually," not an abrupt cutoff
   breathPulseAmount: 0.035,      // "pulsate in scale slightly along with the low drones"
+  // Per-ring phase bar -- "a continuous, interval-based timekeeping visual
+  // indicator... a white bar that continuously travels around every ring
+  // according to its phase." One per ring, real-time, not event-stepped.
+  phaseBarArcWidth: 0.4,         // how wide the bar/its echoes are, in spokes
+  phaseBarEchoLife: 900,         // brief -- "won't be too distracting"
+  phaseBarEchoStrength: 0.3,
 };
 
 // Shortest-arc interpolation between two (possibly fractional) spoke
@@ -80,6 +86,29 @@ export const DEFAULT_VIEW_PARAMS = {
 function lerpSpokeShortest(from, to, t) {
   const diff = ((to - from + SPOKE_COUNT / 2) % SPOKE_COUNT + SPOKE_COUNT) % SPOKE_COUNT - SPOKE_COUNT / 2;
   return from + diff * t;
+}
+
+// "When a ring containing letters/numbers rotates, they should follow both
+// in position AND rotation." Draws text at (x, y) rotated so its own local
+// "up" points radially outward from the wheel's center at `effectiveSpoke`
+// -- the exact same spoke value already used to compute (x, y) via
+// spokePoint, so a glyph's rotation is always derived from the identical
+// position it's drawn at, never a separate signal that could drift out of
+// sync. `spokeAngle(effectiveSpoke)` alone is the correct rotation (not
+// `spokeAngle(...) - PI/2`, the canvas-shifted angle spokePoint itself
+// uses internally) -- verified directly: at spoke 1 (top, angle 0) this is
+// 0 (upright, matching today's unrotated default look); at spoke 4 (right)
+// it's +90 deg (text's own "up" now points right, i.e., outward); at spoke
+// 7 (bottom) it's 180 deg (text reads upside-down, its "up" pointing down,
+// i.e., outward) -- genuinely correct at every position, not a
+// readability-preserving flip trick, since "rotational ACCURACY" was the
+// explicit ask.
+function drawRadialText(ctx, text, x, y, effectiveSpoke) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(spokeAngle(effectiveSpoke));
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
 }
 
 // Ring hues are law-declared (00-laws.md/lexicon: given=yellow, received=
@@ -132,20 +161,22 @@ export class WheelView {
     // stable, always-readable record of what's actually been traced.
     this.persistentTraceByRing = { given: [], received: [], made: [] };
     this._persistentCapacity = WheelView.MAX_PERSISTENT_POINTS;
+    // Each ring's own CURRENT real-time phase position (a plain spoke
+    // number, continuously updated every render() call from the same
+    // hullCursorByRing interpolation the tracer already uses) -- "a
+    // continuous, interval-based timekeeping visual indicator... a white
+    // bar that continuously travels around every ring according to its
+    // phase." Read back by pulsePhaseBarPulse/captureStandingGeneration
+    // (both fire OUTSIDE render()) so an echo always spawns from wherever
+    // the bar genuinely was as of the most recent frame, never a
+    // separately-tracked or stale value.
+    this._ringPhaseSpoke = { given: 1, received: 1, made: 1 };
     // "Luminosity of the projected/receding trace could correspond to
     // note hits or events, to create a continual, subtle and unified
     // visual feedback system." The shared anchor for the two rare,
     // structurally-real events (breath cycle, grand convergence) -- a
     // brief brightness boost, linearly decaying. See pulseFigure.
     this._eventPulse = { amount: 0, startedAt: 0, life: 1 };
-    // "We can make the larger master trace projection invisible except on
-    // full synchronizations/transforms." The hull's own flash state --
-    // separate from `_eventPulse` above (which boosts the TRACE/tracer)
-    // because the hull needs to go all the way to genuinely zero at rest,
-    // not just dim, and benefits from a longer life so "the whole figure
-    // flaring" actually reads before receding. Set by the same real events,
-    // via pulseFigure -- see PULSE_KIND below.
-    this._hullFlash = { amount: 0, startedAt: 0, life: 1 };
     // "Far more frequency in the segments/figures being echoed... make
     // sure all of our trace segments are persistent" -- the persistent
     // layer above (recordVisit) already guarantees this unconditionally,
@@ -198,10 +229,10 @@ export class WheelView {
     this.masterHull = [];
     this._hullEchoAges = [];
     this._eventPulse = { amount: 0, startedAt: 0, life: 1 };
-    this._hullFlash = { amount: 0, startedAt: 0, life: 1 };
     this._echoes = [];
     this._standingGenerations = [];
     this._transformEchoes = [];
+    this._ringPhaseSpoke = { given: 1, received: 1, made: 1 };
   }
 
   // Same shape as synth.js's setNoteParam/setDroneParam -- a live-tunable
@@ -246,7 +277,12 @@ export class WheelView {
   // so they trail out smoothly rather than all animating in lockstep --
   // `_spawnEcho` treats "not yet born" as simply invisible until reached
   // (see render()'s own alpha guard).
-  _spawnEcho(ring, trail, style, styleKind, direction, reach = 1, bornAt = performance.now()) {
+  // `baseR`: the absolute reference radius this echo travels from -- null
+  // (default) means "the shared trace baseRadius, computed fresh each
+  // frame at render time" (every hit/burst echo). Phase-bar echoes pass a
+  // real, fixed value instead (that ring's own outer band edge), since
+  // they emanate from the RING's own radius, not the trace's.
+  _spawnEcho(ring, trail, style, styleKind, direction, reach = 1, bornAt = performance.now(), baseR = null) {
     if (trail.length < 2) return;
     const spokes = (Number.isFinite(style.count) ? trail.slice(-style.count) : trail).map((v) => v.spoke);
     if (spokes.length < 2) return;
@@ -255,7 +291,7 @@ export class WheelView {
     // travel distance can be dialed in rather than baked in.
     const vp = this._viewParams;
     const to = direction === "in" ? 1 - reach * vp.echoReachIn : 1 + reach * vp.echoReachOut;
-    this._echoes.push({ ring, spokes, styleKind, bornAt, life: style.life, from: 1, to, strength: style.strength });
+    this._echoes.push({ ring, spokes, styleKind, bornAt, life: style.life, from: 1, to, strength: style.strength, baseR });
     if (this._echoes.length > WheelView.ECHO_CAP) this._echoes.shift();
   }
 
@@ -308,13 +344,13 @@ export class WheelView {
   // -- transposition/stage (a real upheaval of the underlying structure)
   // get more, stronger waves than a routine breath. Drives three things: a
   // brief brightness boost on the trace/tracer (`_eventPulse`), the master
-  // hull's own illumination (`_hullFlash`, longer-lived so "the whole
-  // figure flaring" actually reads), and the burst echoes themselves.
+  // hull's own brief traveling echo pass (`hull` weights its strength --
+  // see pulseHullEcho), and the burst echoes themselves.
   static PULSE_KIND = {
-    breath: { boost: 0.4, boostLife: 550, hull: 0.55, hullLife: 1100, burstWaves: 1 },
-    convergence: { boost: 1, boostLife: 1600, hull: 0.9, hullLife: 3200, burstWaves: 3 },
-    transposition: { boost: 0.6, boostLife: 1000, hull: 0.7, hullLife: 2000, burstWaves: 4 },
-    stage: { boost: 0.75, boostLife: 1100, hull: 0.8, hullLife: 2200, burstWaves: 4 },
+    breath: { boost: 0.4, boostLife: 550, hull: 0.55, burstWaves: 1 },
+    convergence: { boost: 1, boostLife: 1600, hull: 0.9, burstWaves: 3 },
+    transposition: { boost: 0.6, boostLife: 1000, hull: 0.7, burstWaves: 4 },
+    stage: { boost: 0.75, boostLife: 1100, hull: 0.8, burstWaves: 4 },
   };
 
   // Milliseconds between each burst wave's own birth -- "velocity-to-echo
@@ -329,7 +365,6 @@ export class WheelView {
     const w = WheelView.PULSE_KIND[kind] || WheelView.PULSE_KIND.breath;
     const startedAt = performance.now();
     this._eventPulse = { amount: w.boost, startedAt, life: w.boostLife };
-    this._hullFlash = { amount: w.hull, startedAt, life: w.hullLife };
     // "Higher resolution echo sequences that will fully emanate inward and
     // outward, just like a full trace echo, but more dynamic and
     // transient, almost like a more powerful ripple/wake" -- `burstWaves`
@@ -350,6 +385,11 @@ export class WheelView {
         this._spawnEcho(ring, trail, waveStyle, "burst", "in", reach, waveBornAt);
       }
     }
+    // "The brief flashes of the trace schematic/blueprint outline should
+    // emanate outward, not linger in space" -- fires on EVERY real
+    // synchronizing event now (all four kinds), weighted by this event's
+    // own real structural weight, same as the burst waves above.
+    this.pulseHullEcho(w.hull);
   }
 
   // "A standing set of echoes emanating inward and outward... advance
@@ -396,24 +436,63 @@ export class WheelView {
       this._standingGenerations.unshift({ snapshot, rank: 0, depthFrom: -1, depthEaseStartedAt: now });
       if (this._standingGenerations.length > maxGen) this._standingGenerations.pop();
     }
+    // "[Phase bars] emanate echoes... inward at diagram-echo-level
+    // intervals" -- the SAME real cadence as everything else in the
+    // tunnel (this method's own trigger), one inward pulse per ring, from
+    // wherever that ring's own phase bar currently is.
+    for (const ring of Object.keys(this._ringPhaseSpoke)) {
+      this._spawnPhaseBarEcho(ring, "in");
+    }
   }
 
-  // "The traced/white-line geometry should only briefly pass backward into
-  // space as an echo, the trace itself in motion is what should
-  // produce/maintain standing waves." A real correction: the master hull
-  // (the whole-phrase blueprint, fixed and static -- never "in motion" the
-  // way a ring's own actively-growing trace is) doesn't get a standing,
-  // accumulating shift register like the per-ring tunnel above. Just ONE
-  // brief one-shot pass, both directions, spawned only when the whole
-  // trace genuinely completes/transforms (see retireTrace) -- not per
-  // hit, not accumulating rank.
-  pulseHullEcho() {
+  // Small local arc (not a bare point -- same "never a bare point"
+  // discipline as every other echo in this file) centered on this ring's
+  // CURRENT phase-bar position. `direction`: "out" on a real per-pulse
+  // time-based event (pulsePhaseBarPulse, called from main.js's onPulse)
+  // or "in" at diagram-echo-level intervals (captureStandingGeneration,
+  // above). Deliberately its OWN styleKind ("phasebar") -- rendered near-
+  // white like the bar itself, not ring-hued like hit/burst echoes, so the
+  // "timekeeping" layer reads as visually distinct from the trace/echo
+  // layer it rides alongside.
+  _spawnPhaseBarEcho(ring, direction) {
+    const spoke = this._ringPhaseSpoke[ring];
+    if (spoke == null) return;
+    const vp = this._viewParams;
+    const arc = [{ spoke: spoke - vp.phaseBarArcWidth }, { spoke: spoke + vp.phaseBarArcWidth }];
+    // Emanates from THIS ring's own outer band edge, not the trace's
+    // baseRadius -- the bar lives at the ring, so its echo should too.
+    const ringDef = RINGS.find((r) => r.name === ring);
+    const baseR = this.outerR * (ringDef ? ringDef.rTo : 1);
+    this._spawnEcho(ring, arc, { life: vp.phaseBarEchoLife, strength: vp.phaseBarEchoStrength, count: 2 }, "phasebar", direction, 1, performance.now(), baseR);
+  }
+
+  // Called from main.js's onPulse -- one real raw pulse IS this ring's own
+  // "relevant time-based event," so an outward echo here is a genuine,
+  // real-time tick, not a fabricated metronome.
+  pulsePhaseBarPulse(ring) {
+    this._spawnPhaseBarEcho(ring, "out");
+  }
+
+  // "The brief flashes of the trace schematic/blueprint outline should
+  // emanate outward, not linger in space... all trace marks/hulls are
+  // contained within the same space-time-tunnel continuum and should
+  // reflect that cohesively." A real correction: the master hull (the
+  // whole-phrase blueprint, fixed and static -- never "in motion" the way
+  // a ring's own actively-growing trace is) doesn't get a standing,
+  // accumulating shift register like the per-ring tunnel above -- just ONE
+  // brief one-shot pass, BOTH directions, genuinely traveling (not a
+  // stationary brightness flash), spawned on every real synchronizing
+  // event (see pulseFigure) or a full-trace/transform completing (see
+  // retireTrace). `strengthMult` lets a real event's own structural weight
+  // (PULSE_KIND's `hull`) carry through to how bright this specific pass
+  // reads, the same convention burst waves already use.
+  pulseHullEcho(strengthMult = 1) {
     if (this.masterHull.length < 2) return;
     const vp = this._viewParams;
     const now = performance.now();
     this._hullEchoAges = [
-      { bornAt: now, life: vp.hullEchoLife, direction: "out" },
-      { bornAt: now, life: vp.hullEchoLife, direction: "in" },
+      { bornAt: now, life: vp.hullEchoLife, direction: "out", strengthMult },
+      { bornAt: now, life: vp.hullEchoLife, direction: "in", strengthMult },
     ];
   }
 
@@ -422,9 +501,14 @@ export class WheelView {
   // pass or transform completes (given's own full loop, a transposition
   // step) -- captures everything CURRENTLY on the flat plane into the
   // tunnel (the same real snapshot captureStandingGeneration already
-  // takes), fires the master hull's own brief echo pass, then clears the
-  // flat plane so the next segment reads as genuinely fresh rather than an
-  // ever-thickening overlay of every hit since Play.
+  // takes), fires the master hull's own brief echo pass (covers the one
+  // real case with no accompanying pulseFigure call -- a given-loop
+  // completing while transposition is off), then clears the flat plane so
+  // the next segment reads as genuinely fresh rather than an
+  // ever-thickening overlay of every hit since Play. Harmless to also fire
+  // alongside pulseFigure's own call for the same event -- pulseHullEcho
+  // overwrites `_hullEchoAges` wholesale rather than appending, so a
+  // near-simultaneous double call just restarts the same one pass, not two.
   retireTrace() {
     this.captureStandingGeneration();
     this.pulseHullEcho();
@@ -624,7 +708,7 @@ export class WheelView {
         const labelP = spokePoint(s - offset, ringMid, cx, cy);
         ctx.font = "9px sans-serif";
         ctx.fillStyle = WHEEL_PALETTE.label;
-        ctx.fillText(String(s), labelP.x, labelP.y);
+        drawRadialText(ctx, String(s), labelP.x, labelP.y, s - offset);
       }
     }
 
@@ -705,8 +789,9 @@ export class WheelView {
     // as one coherent, moving unit), not a separately-paced signal.
     // Unassigned/empty-spoke content has no ring to inherit from, so it
     // follows the outer rim's own dial instead -- the nearest ring it's
-    // actually drawn beside.
-    const rimLetterOffset = masterRotationOffset || 0;
+    // actually drawn beside. Reused below for the master hull too (see its
+    // own comment) -- same rim dial, same real transposition-event trigger.
+    const rimOffset = masterRotationOffset || 0;
     for (let s = 1; s <= SPOKE_COUNT; s++) {
       const groups = ringLabelsAtSpoke ? ringLabelsAtSpoke(s) : {};
       ctx.textAlign = "center";
@@ -720,10 +805,10 @@ export class WheelView {
         const label = letters.join("/");
         ctx.font = isPole(s) ? "bold 11px sans-serif" : "10px sans-serif";
         ctx.fillStyle = WHEEL_PALETTE.label;
-        ctx.fillText(label, p.x, p.y);
+        drawRadialText(ctx, label, p.x, p.y, s - ringOffset);
       }
       if (groups.unassigned && groups.unassigned.length) {
-        const p = spokePoint(s - rimLetterOffset, outerR + 26, cx, cy);
+        const p = spokePoint(s - rimOffset, outerR + 26, cx, cy);
         const label = groups.unassigned.join("/");
         ctx.font = isPole(s) ? "italic bold 11px sans-serif" : "italic 10px sans-serif";
         const circumR = Math.max(11, ctx.measureText(label).width / 2 + 6);
@@ -735,12 +820,12 @@ export class WheelView {
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.fillStyle = WHEEL_PALETTE.labelUnassigned;
-        ctx.fillText(label, p.x, p.y);
+        drawRadialText(ctx, label, p.x, p.y, s - rimOffset);
       }
       if (!Object.keys(groups).length) {
         // No table entry at all for this spoke -- fall back to the raw
         // number so an empty spoke still reads as something.
-        const p = spokePoint(s - rimLetterOffset, outerR + 18, cx, cy);
+        const p = spokePoint(s - rimOffset, outerR + 18, cx, cy);
         ctx.beginPath();
         ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
         ctx.setLineDash([2, 3]);
@@ -749,7 +834,7 @@ export class WheelView {
         ctx.setLineDash([]);
         ctx.fillStyle = WHEEL_PALETTE.emptySpokeNumber;
         ctx.font = isPole(s) ? "bold 13px sans-serif" : "12px sans-serif";
-        ctx.fillText(String(s), p.x, p.y);
+        drawRadialText(ctx, String(s), p.x, p.y, s - rimOffset);
       }
     }
 
@@ -778,36 +863,15 @@ export class WheelView {
     // later frame's structural drawing.
     ctx.globalCompositeOperation = "lighter";
 
-    // Master hull -- "we can make the larger master trace projection
-    // invisible except on full synchronizations/transforms." At rest,
-    // genuinely absent (zero alpha, not a permanently-present dim dashed
-    // outline as before) -- `_hullFlash` (see pulseFigure/PULSE_KIND) only
-    // lights it on a real synchronizing event (breath cycle, grand
-    // convergence, a transposition step, a procession stage crossing),
-    // then lets it recede back to nothing. Drawn additively, in a bright
-    // neutral (not the dim structural WHEEL_PALETTE.hull -- that color was
-    // tuned to be dim-but-present; this needs to read as the whole figure
-    // actively flaring) so it punctuates the moment rather than existing
-    // as scenery.
-    if (this.masterHull.length > 1) {
-      const hullT = Math.max(0, 1 - (now - this._hullFlash.startedAt) / this._hullFlash.life);
-      const hullAlpha = this._hullFlash.amount * hullT;
-      if (hullAlpha > 0.002) {
-        ctx.beginPath();
-        this.masterHull.forEach((s, i) => {
-          const p = spokePoint(s, outerR, cx, cy);
-          if (i === 0) ctx.moveTo(p.x, p.y);
-          else ctx.lineTo(p.x, p.y);
-        });
-        ctx.strokeStyle = "#f4ead0";
-        ctx.lineWidth = 1.5 + hullAlpha * 1.5;
-        ctx.setLineDash([5, 4]);
-        ctx.globalAlpha = hullAlpha;
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 1;
-      }
-    }
+    // Master hull -- no longer drawn here at all. "The brief flashes of
+    // the trace schematic/blueprint outline should emanate outward, not
+    // linger in space" -- a stationary in-place brightness flash (the old
+    // `_hullFlash`) was exactly that lingering. The hull is now ONLY ever
+    // visible via its own brief, genuinely traveling echo pass
+    // (pulseHullEcho/_hullEchoAges, rendered further down, unclipped,
+    // rotated by `rimOffset` the same as everything else that tracks
+    // transposition) -- consistent with "all trace marks/hulls are
+    // contained within the same space-time-tunnel continuum."
 
     // The PERSISTENT layer -- "flat-plane persistence to give a readable
     // trace the user can see clearly," but "less persistent, allowing for
@@ -867,6 +931,14 @@ export class WheelView {
       } else {
         p = spokePoint(1, baseRadius, cx, cy);
       }
+
+      // Real-time phase position, as a fractional SPOKE value (shortest-arc
+      // interpolated -- sweeps along the ring's own arc, not a chord cut
+      // through it) -- "a continuous, interval-based timekeeping visual
+      // indicator... according to its phase." Stored for
+      // pulsePhaseBarPulse/captureStandingGeneration (both fire outside
+      // render()) to read back; drawn as the bar itself further down.
+      this._ringPhaseSpoke[ringName] = cursor ? lerpSpokeShortest(cursor.fromSpoke, cursor.toSpoke, cursor.progress) : 1;
 
       const flash = ringHitFlash?.[ringName];
       const age = flash ? now - flash.firedAt : Infinity;
@@ -928,6 +1000,31 @@ export class WheelView {
     ctx.arc(cx, cy, frameClipRadius, 0, Math.PI * 2);
     ctx.clip();
 
+    // Per-ring phase bar -- "a continuous, interval-based timekeeping
+    // visual indicator in the outermost rings, a white bar that
+    // continuously travels around every ring according to its phase."
+    // Riding the outer edge of each of the 3 letter-bearing bands, at that
+    // ring's own real-time position (`_ringPhaseSpoke`, just computed
+    // above), rotated by the SAME per-ring dial the bezel/letters use, so
+    // it stays visually locked to its own ring rather than drifting
+    // against a rotating backdrop. Crisp, non-additive, thin -- "ideally
+    // they won't be too distracting from the main imagery."
+    for (const ring of RINGS) {
+      const ringOffset = ringDialOffsets?.[ring.name] || 0;
+      const barSpoke = this._ringPhaseSpoke[ring.name] - ringOffset;
+      const rOut = outerR * ring.rTo;
+      const barIn = spokePoint(barSpoke, rOut, cx, cy);
+      const barOut = spokePoint(barSpoke, rOut + 7, cx, cy);
+      ctx.beginPath();
+      ctx.moveTo(barIn.x, barIn.y);
+      ctx.lineTo(barOut.x, barOut.y);
+      ctx.strokeStyle = "#f4ead0";
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.85;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
     // Standing generations -- the ambient background layer: rare, real
     // captures (recordVisit, every real given-ring hit) but CONTINUOUS
     // motion once alive -- "more continuously advancing outward/receding,
@@ -972,29 +1069,31 @@ export class WheelView {
       }
     }
 
-    // Propagating echoes, HIT kind only here (still inside the clip --
-    // this is per-note ambient texture, part of the same contained field
-    // as the standing tunnel). `burst` kind is drawn further down,
-    // unclipped -- see that block's own comment for why. A real note
-    // landing, always rippling inward -- "activated letters... echoed
-    // backward... into the vanishing point." Simple one-shot eased sweep
-    // from the live trace's own radius toward its target, fading over its
-    // own life. Deliberately drawn in NORMAL (non-additive) compositing --
-    // precise, thin engraved lines, not soft light to blend.
+    // Propagating echoes, HIT and PHASEBAR kinds only here (still inside
+    // the clip -- both are per-note/per-pulse ambient texture, part of the
+    // same contained field as the standing tunnel). `burst` kind is drawn
+    // further down, unclipped -- see that block's own comment for why. A
+    // real note landing, always rippling inward -- "activated letters...
+    // echoed backward... into the vanishing point" (hit); a phase bar's
+    // own real-time tick, in/out (phasebar, near-white -- see
+    // _spawnPhaseBarEcho). Simple one-shot eased sweep from the live
+    // trace's own radius toward its target, fading over its own life.
+    // Deliberately drawn in NORMAL (non-additive) compositing -- precise,
+    // thin engraved lines, not soft light to blend.
     this._echoes = this._echoes.filter((echo) => now - echo.bornAt < echo.life);
     for (const echo of this._echoes) {
-      if (echo.styleKind !== "hit") continue;
+      if (echo.styleKind !== "hit" && echo.styleKind !== "phasebar") continue;
       if (now < echo.bornAt) continue;
       const t = (now - echo.bornAt) / echo.life;
       const eased = 1 - Math.pow(1 - t, 2);
-      const r = baseRadius * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
+      const r = (echo.baseR ?? baseRadius) * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
       // "Should fade to black before disappearing more gradually" -- an
       // exponent > 1 keeps an echo visibly bright for longer, then tapers
       // off gently near the end of its life instead of a linear ramp that
       // reads as an abrupt cutoff.
       const alpha = echo.strength * Math.pow(1 - t, this._viewParams.echoFadeExponent);
       if (alpha <= 0.003) continue;
-      ctx.strokeStyle = RING_MARKER_COLOR[echo.ring];
+      ctx.strokeStyle = echo.styleKind === "phasebar" ? "#f4ead0" : RING_MARKER_COLOR[echo.ring];
       ctx.lineWidth = 1;
       ctx.globalAlpha = alpha;
       ctx.beginPath();
@@ -1026,7 +1125,7 @@ export class WheelView {
       for (const age of this._hullEchoAges) {
         const t = (now - age.bornAt) / age.life;
         const eased = 1 - Math.pow(1 - t, 2);
-        const alpha = vpStanding.hullEchoStrength * Math.pow(1 - t, this._viewParams.echoFadeExponent);
+        const alpha = vpStanding.hullEchoStrength * (age.strengthMult ?? 1) * Math.pow(1 - t, this._viewParams.echoFadeExponent);
         if (alpha <= 0.003) continue;
         const scale = (1 + (age.direction === "in" ? -1 : 1) * eased * vpStanding.hullEchoReach) * breathPulse;
         if (scale <= 0.03) continue;
@@ -1037,7 +1136,7 @@ export class WheelView {
         ctx.globalAlpha = alpha;
         ctx.beginPath();
         this.masterHull.forEach((s, i) => {
-          const pt = spokePoint(s, r, cx, cy);
+          const pt = spokePoint(s - rimOffset, r, cx, cy);
           if (i === 0) ctx.moveTo(pt.x, pt.y);
           else ctx.lineTo(pt.x, pt.y);
         });
@@ -1048,9 +1147,9 @@ export class WheelView {
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           this.masterHull.forEach((s, i) => {
-            const pt = spokePoint(s, r, cx, cy);
+            const pt = spokePoint(s - rimOffset, r, cx, cy);
             ctx.fillStyle = "#f4ead0";
-            ctx.fillText(this.masterHullLetters[i], pt.x, pt.y);
+            drawRadialText(ctx, this.masterHullLetters[i], pt.x, pt.y, s - rimOffset);
           });
         }
         ctx.globalAlpha = 1;
@@ -1070,7 +1169,7 @@ export class WheelView {
       if (now < echo.bornAt) continue;
       const t = (now - echo.bornAt) / echo.life;
       const eased = 1 - Math.pow(1 - t, 2);
-      const r = baseRadius * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
+      const r = (echo.baseR ?? baseRadius) * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
       const alpha = echo.strength * Math.pow(1 - t, this._viewParams.echoFadeExponent);
       if (alpha <= 0.003) continue;
       ctx.strokeStyle = RING_MARKER_COLOR[echo.ring];

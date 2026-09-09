@@ -254,7 +254,10 @@ let tierEmphasis = 1;
 // "retrograde", degree? (rotate only), bounce? }. Kept in sync with the
 // dynamic step-row UI below; read fresh at Play time (main.js's own
 // established pattern for every other response-adjacent control).
-let responseSteps = [];
+// "Set up for ideal display of its capabilities... mirror step" -- one
+// pre-added by default so a fresh page load already demonstrates the
+// Response operator, rather than requiring a click before anything shows.
+let responseSteps = [{ type: "mirror" }];
 
 function renderResponseSteps() {
   const container = $("response-steps");
@@ -365,7 +368,11 @@ renderResponseSteps();
 // of fifths as a real-time process: gcd(7,12)=1, so it visits all 12
 // positions before returning home, a real, self-resolving musical
 // structure, not invented for this engine.
-let transpositionEnabled = false;
+// Defaults to true (matches index.html's own `checked` on the checkbox --
+// the change listener only fires on user interaction, not on page load, so
+// both need to independently agree) -- "set up for ideal display of its
+// capabilities," cyclic transposition on by default for the demo.
+let transpositionEnabled = true;
 let transpositionStepSpokes = ROTATION_SPOKE_SHIFT;
 let transpositionOffsetSpokes = 0;
 // Real bug, root cause of "instant jumps": advanceTransposition used to
@@ -548,6 +555,9 @@ const sequencer = new Sequencer({
     // synth.js's pulseDrone for why (this was "the drone feels disjointed
     // from the wheel," addressed at the actual clock level).
     audio.pulseDrone(ring, spoke);
+    // "[Phase bars] emanate echoes outward on relevant time-based events"
+    // -- one real raw pulse IS this ring's own time-based event.
+    view.pulsePhaseBarPulse(ring);
     // Tracer progress -- one more real raw pulse traveled toward whichever
     // real hit this ring is currently gliding toward.
     const hc = hullCursor[ring];
@@ -898,6 +908,13 @@ tickRate();
 
 $("play").addEventListener("click", () => {
   audio.ensureContext();
+  // The drone may already be toggled "on" (including by default -- see
+  // setDrone's own comment) without its audio ever having actually
+  // started, since that needs a real user gesture. Play is one.
+  if (droneOn && !droneAudioStarted) {
+    audio.setDroneVoices(true, DRONE_HZ);
+    droneAudioStarted = true;
+  }
   try {
     const { trace: callTrace, rootSpoke, unknownTokens } = deriveTrace($("input").value);
 
@@ -1022,13 +1039,27 @@ $("stop").addEventListener("click", () => {
   sequencer.stop();
 });
 
-let droneOn = false;
+// "Set up for ideal display of its capabilities... drone on" -- but "all
+// playback should be silent on stopped/not played, so the drone shouldn't
+// start making sound until play is pressed." Two separate concerns:
+// `droneOn` is the logical/displayed toggle state (can default to true);
+// `droneAudioStarted` tracks whether audio.setDroneVoices has actually been
+// called (real oscillators running). audio.ensureContext() requires a real
+// user gesture, so it can never run at page load -- only a genuine click
+// (the drone button itself, or Play, both real gestures) may start it.
+let droneOn = true;
+let droneAudioStarted = false;
 function setDrone(on) {
   droneOn = on;
   audio.ensureContext();
   audio.setDroneVoices(on, DRONE_HZ);
+  droneAudioStarted = true;
   $("drone").textContent = droneOn ? "drone: on (dry -> attested)" : "drone: off";
 }
+// Reflects the default `droneOn = true` in the button's own label WITHOUT
+// touching audio -- see setDrone's own comment on why that has to wait for
+// a real user gesture.
+$("drone").textContent = "drone: on (dry -> attested)";
 $("drone").addEventListener("click", () => setDrone(!droneOn));
 
 // "A more direct way to survey the sound possibilities... dialed in more

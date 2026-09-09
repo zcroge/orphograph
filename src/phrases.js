@@ -6,12 +6,16 @@
 
 const STORAGE_KEY = "orphograph.savedPhrases.v1";
 
+// "Set up for ideal display of its capabilities... ORFOGRAEF picked" --
+// first in the list, since populatePhraseSelect (main.js) never sets an
+// explicit `.selected`, so the browser's own default (first <option> wins)
+// is what actually determines which one reads as "picked" on page load,
+// matching the input field's own hardcoded default (index.html).
 export const DEFAULT_PHRASES = [
-  { name: "I-K-T O (rest + loop demo)", text: "I-K-T O" },
-  { name: "I O (the two poles, one rest apart)", text: "I O" },
-  { name: "SH-O-R-E (hush's own object)", text: "SH-O-R-E" },
-  { name: "Otter (O's acrophon -- best-guess spelling, verify)", text: "O-T-R" },
-  { name: "Djyash (field-forced hush/SH -- best-guess spelling, verify)", text: "JH-Y-A-SH" },
+  { name: "Orphograph", text: "O-R-F-O-G-R-AE-F" },
+  { name: "Dogman", text: "D-AO-G-M-AE-N" },
+  { name: "Respondeo atsi mootabor", text: "R-E-S-P-AO-N-D-E-O AE-T-S-I M-OO-T-A-B-O-R" },
+  { name: "Veritas", text: "V-E-R-I-T-A-S" },
 ];
 
 function readSaved() {
