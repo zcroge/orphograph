@@ -1366,10 +1366,35 @@ function wireTimbrePanel({ category, idPrefix, keys, setParam, defaults, presetS
   });
 }
 
+// Named once, referenced both by wireTimbrePanel below AND by the
+// export/import settings feature further down -- the SAME authoritative
+// key list either way, so the two can never drift apart.
+const NOTE_PANEL_KEYS = ["attackMs", "lowpassHz", "lowpassQ", "bodyHz", "bodyQ", "bodyAmountDb", "pluckAmount", "pluckMs"];
+const DRONE_PANEL_KEYS = [
+  "busGain",
+  "breathPulsesPerCycle", "breathDepth", "vibratoCyclesPerPulse", "vibratoCents", "breathNoiseGain",
+  "formantF1Q", "formantF2Q", "formantBlendGain",
+  "whistleHarmonic", "whistleHarmonicMin", "whistleHarmonicMax", "whistleGlideMs", "whistleNoteGateDipAmount",
+  "whistleDetuneCents",
+  "whistleAmount",
+  "whistleVibratoRateHz", "whistleVibratoCents", "whistleVibratoAmpDepth",
+  "whistleBreathAmount", "whistleBreathColorRatio", "whistleBreathSurgeAmount", "whistleChiffAmount",
+  "whistleArticulationPulseFraction", "whistleBreathToneCoupling", "whistleArticulationAmount",
+  "whistleBrightnessTempoSensitivity", "whistleBrightnessReferencePps", "whistleToneColorRatio",
+  "whistleChamberAmountDb", "whistleChamberQ", "whistleChamberModes",
+  "whistleGrowlAmount", "whistleGrowlF1Hz", "whistleGrowlF2Hz", "whistleGrowlQ",
+  "whistleGrowlWanderHz", "whistleGrowlWanderDepth",
+  "whistleDroneWaveCyclesPerRingPulse", "whistleDroneWaveDepth",
+  "whistleThroatAmount", "whistleThroatSubharmonicAmount",
+  "whistleBoxHz", "whistleBoxQ", "whistleBoxAmountDb",
+  "moveFilterHz", "moveFilterPulsesPerCycle", "moveFilterDepthHz", "bassBoostHz", "bassBoostDb",
+];
+const VIEW_PANEL_KEYS = Object.keys(DEFAULT_VIEW_PARAMS);
+
 wireTimbrePanel({
   category: "note",
   idPrefix: "np",
-  keys: ["attackMs", "lowpassHz", "lowpassQ", "bodyHz", "bodyQ", "bodyAmountDb", "pluckAmount", "pluckMs"],
+  keys: NOTE_PANEL_KEYS,
   setParam: (key, value) => audio.setNoteParam(key, value),
   defaults: DEFAULT_NOTE_PARAMS,
   presetSelectId: "note-preset-select",
@@ -1381,25 +1406,7 @@ wireTimbrePanel({
 wireTimbrePanel({
   category: "drone",
   idPrefix: "dp",
-  keys: [
-    "busGain",
-    "breathPulsesPerCycle", "breathDepth", "vibratoCyclesPerPulse", "vibratoCents", "breathNoiseGain",
-    "formantF1Q", "formantF2Q", "formantBlendGain",
-    "whistleHarmonic", "whistleHarmonicMin", "whistleHarmonicMax", "whistleGlideMs", "whistleNoteGateDipAmount",
-    "whistleDetuneCents",
-    "whistleAmount",
-    "whistleVibratoRateHz", "whistleVibratoCents", "whistleVibratoAmpDepth",
-    "whistleBreathAmount", "whistleBreathColorRatio", "whistleBreathSurgeAmount", "whistleChiffAmount",
-    "whistleArticulationPulseFraction", "whistleBreathToneCoupling", "whistleArticulationAmount",
-    "whistleBrightnessTempoSensitivity", "whistleBrightnessReferencePps", "whistleToneColorRatio",
-    "whistleChamberAmountDb", "whistleChamberQ", "whistleChamberModes",
-    "whistleGrowlAmount", "whistleGrowlF1Hz", "whistleGrowlF2Hz", "whistleGrowlQ",
-    "whistleGrowlWanderHz", "whistleGrowlWanderDepth",
-    "whistleDroneWaveCyclesPerRingPulse", "whistleDroneWaveDepth",
-    "whistleThroatAmount", "whistleThroatSubharmonicAmount",
-    "whistleBoxHz", "whistleBoxQ", "whistleBoxAmountDb",
-    "moveFilterHz", "moveFilterPulsesPerCycle", "moveFilterDepthHz", "bassBoostHz", "bassBoostDb",
-  ],
+  keys: DRONE_PANEL_KEYS,
   setParam: (key, value) => audio.setDroneParam(key, value),
   defaults: DEFAULT_DRONE_PARAMS,
   presetSelectId: "drone-preset-select",
@@ -1415,13 +1422,68 @@ wireTimbrePanel({
 wireTimbrePanel({
   category: "view",
   idPrefix: "vp",
-  keys: Object.keys(DEFAULT_VIEW_PARAMS),
+  keys: VIEW_PANEL_KEYS,
   setParam: (key, value) => view.setViewParam(key, value),
   defaults: DEFAULT_VIEW_PARAMS,
   presetSelectId: "view-preset-select",
   saveBtnId: "view-preset-save",
   deleteBtnId: "view-preset-delete",
   resetBtnId: "view-preset-reset",
+});
+
+// "Full authorship over defaults/presets... a portable way to
+// save/share/restore a full tuning state." One combined export covering
+// all three tunable categories at once -- exactly the numeric keys
+// wireTimbrePanel already manages for each (NOTE_PANEL_KEYS/
+// DRONE_PANEL_KEYS/VIEW_PANEL_KEYS above), so export can never drift from
+// what's actually tunable. Import reuses setSliderValue (main.js's own
+// established "set a slider programmatically" idiom -- dispatches a real
+// `input` event) so applying a file is indistinguishable from a user
+// manually dragging every slider: live-updates AND persists to
+// last-session exactly like a hand-tune would.
+function currentCategoryValues(idPrefix, keys) {
+  const out = {};
+  for (const key of keys) {
+    const el = $(`${idPrefix}-${key}`);
+    if (el) out[key] = Number(el.value);
+  }
+  return out;
+}
+
+$("export-settings").addEventListener("click", () => {
+  const payload = {
+    note: currentCategoryValues("np", NOTE_PANEL_KEYS),
+    drone: currentCategoryValues("dp", DRONE_PANEL_KEYS),
+    view: currentCategoryValues("vp", VIEW_PANEL_KEYS),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "orphograph-settings.json";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+$("import-settings-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    const apply = (idPrefix, keys, values) => {
+      if (!values) return;
+      for (const key of keys) {
+        if (!(key in values)) continue;
+        setSliderValue(`${idPrefix}-${key}`, values[key]);
+      }
+    };
+    apply("np", NOTE_PANEL_KEYS, data.note);
+    apply("dp", DRONE_PANEL_KEYS, data.drone);
+    apply("vp", VIEW_PANEL_KEYS, data.view);
+  } catch (err) {
+    alert("Couldn't read that settings file: " + err.message);
+  }
+  e.target.value = ""; // allow re-importing the exact same file later
 });
 
 // Per-ring drone/flute mute (dp-mute-*) and the three per-ring drone gain
