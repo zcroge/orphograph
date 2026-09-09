@@ -1284,8 +1284,19 @@ function wireTimbrePanel({ category, idPrefix, keys, setParam, defaults, presetS
   const FACTORY = "__factory__";
 
   function applyAll(params) {
+    // "I changed a preset to an older version and it reverted the flute
+    // fix." Root cause: a preset saved before a param existed (e.g. before
+    // whistleFloorHz/whistleCeilingHz were added) has no entry for it --
+    // params[key] was `undefined`, silently written into the slider and
+    // into setParam as NaN, which quietly disables that param's own
+    // guards (foldIntoRange's own "is this a real range" check reads NaN
+    // as "no range configured" and skips folding entirely). A preset
+    // missing a key now falls back to the CURRENT factory default for
+    // just that key instead -- old presets stay forward-compatible as new
+    // params get added, rather than able to silently switch a later
+    // safety feature back off.
     keys.forEach((key) => {
-      const value = params[key];
+      const value = key in params ? params[key] : defaults[key];
       rows[key].range.value = value;
       rows[key].number.value = value;
       setParam(key, Number(value));
