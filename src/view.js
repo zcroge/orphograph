@@ -99,6 +99,13 @@ export const DEFAULT_VIEW_PARAMS = {
   // slightly in, made pushed slightly out, received centered -- lets
   // overlapping content separate into legible parallel traces instead.
   ringDepthOffset: 0.012,
+  // "A lot of partial or hit-based echoes only create a fully
+  // dissipating, non-stacking, non-incremented echo... we should still
+  // push an echo increment into the pattern/stack on these events, but
+  // those elements should be more subtle." How much weight a routine
+  // per-hit standing-generation push carries, relative to a real
+  // synchronizing event's full weight (1) -- see captureStandingGeneration.
+  standingHitIncrementStrength: 0.4,
 };
 
 // Shortest-arc interpolation between two (possibly fractional) spoke
@@ -180,6 +187,7 @@ export class WheelView {
     // about the diagram's own existing size/proportions changes.
     this.outerR = Math.min(this.cx, this.cy) - 94;
     this.masterHull = [];
+    this.masterHullLetters = [];
     // "There should be some level of flat-plane persistence to give a
     // readable trace the user can see clearly." Capacity-bound, not time-
     // bound (see setTraceCapacity), stays at the ring's own full base
@@ -310,6 +318,7 @@ export class WheelView {
     this._ringSweepTrail = { given: [], received: [], made: [] };
     this._provisionalSegments = [];
     this.masterHull = [];
+    this.masterHullLetters = [];
     this._hullEchoAges = [];
     this._eventPulse = { amount: 0, startedAt: 0, life: 1 };
     this._echoes = [];
@@ -494,12 +503,33 @@ export class WheelView {
   // continuous, unbounded crawl for as long as it's visible -- no
   // dial/settle/hold at all, just elapsed real time, so it never once
   // reads as parked). "The constant procession of echoes should more
-  // accurately reflect the current trace progress of the given ring's
-  // trace" -- captured from `recordVisit` itself, once per real OWNED
-  // given-ring hit (not the much rarer full given-loop wrap, which could
-  // be 20-60+ seconds on a real phrase and read as dead most of the time;
-  // still a real content event, still never per raw beat/pulse).
-  captureStandingGeneration() {
+  // accurately reflect the current trace progress" -- captured from
+  // `recordVisit` itself, on every real hit across all three rings (not
+  // just the much rarer full given-loop wrap/transposition/stage, which
+  // could be 20-60+ seconds on a real phrase and read as dead most of the
+  // time; still a real content event, still never per raw beat/pulse).
+  //
+  // "A lot of partial or hit-based echoes only create a fully
+  // dissipating, non-stacking, non-incremented echo... we should still
+  // push an echo INCREMENT into the pattern/stack on these events,
+  // otherwise we end up with blank moments and it destroys the
+  // persistent breathing-tunnel effect." Real design gap: this used to
+  // fire ONLY on a given-ring OWNED hit -- if a phrase's letters happen
+  // to cluster into received/made tiers (a common, real case, same root
+  // cause as the "only green echoes" bug), given's own owned hits could
+  // be rare-to-nonexistent, so the entire standing tunnel would almost
+  // never advance, sitting stale between the much rarer structural
+  // events (retireTrace) that also push a capture. Now called on EVERY
+  // real hit, any ring, owned or merely passed -- the tunnel keeps
+  // continuously breathing/incrementing, never blank. `strengthMult`
+  // (defaults to full weight, 1 -- what retireTrace's own structural-
+  // event captures still use) lets a routine per-hit push read as
+  // genuinely SUBTLER than a real synchronizing event's, so becoming
+  // more frequent doesn't also mean becoming more visually loud --
+  // stored per-generation and applied at render time (see the standing-
+  // tunnel render loop), the same "real events get real weight"
+  // convention burst waves/hull echoes already use.
+  captureStandingGeneration(strengthMult = 1) {
     const now = performance.now();
     const maxGen = this._viewParams.standingMaxGenerations;
     // "No layering/buildup of standing waves... every echo multiplies
@@ -537,7 +567,7 @@ export class WheelView {
       // match whatever transposition state is true NOW, which is exactly
       // the kind of drift this whole fix exists to prevent -- a snapshot
       // of the past should stay anchored to the past.
-      this._standingGenerations.unshift({ snapshot, rank: 0, depthFrom: -1, depthEaseStartedAt: now, rimOffsetAtCapture: this._currentRimOffset });
+      this._standingGenerations.unshift({ snapshot, rank: 0, depthFrom: -1, depthEaseStartedAt: now, rimOffsetAtCapture: this._currentRimOffset, strengthMult });
       if (this._standingGenerations.length > maxGen) this._standingGenerations.pop();
     }
     // "[Phase bars] emanate echoes... inward at diagram-echo-level
@@ -767,14 +797,6 @@ export class WheelView {
     if (owned) {
       persistent.push({ spoke });
       if (persistent.length > this._persistentCapacity) persistent.shift();
-      // "The constant procession of echoes should more accurately reflect
-      // the current trace progress of the given ring's trace." Given
-      // (slowest, outermost) is what the standing-generation tunnel keys
-      // off of -- a real content event on the SAME ring the rim dial and
-      // transposition already anchor on, frequent enough to feel alive
-      // (every real given-tier hit, not once per 20-60s full loop) while
-      // still never firing on a raw beat/pulse.
-      if (ring === "given") this.captureStandingGeneration();
     } else if (previousSweepPoint) {
       // "The temporary trace paths drawn between two points that don't
       // actually comprise the true trace... currently just vanish
@@ -803,6 +825,15 @@ export class WheelView {
     // ripple backward... into the vanishing point," always inward.
     const vp = this._viewParams;
     this._spawnEcho(ring, sweep, { life: vp.echoHitLife, strength: vp.echoHitStrength, count: WheelView.ECHO_COUNT.hit }, "hit", "in");
+    // "A cohesive approach to our incremental echo/standing wave pattern
+    // -- hit-based echoes should still push an increment into the
+    // pattern/stack, more subtly, otherwise we end up with blank moments
+    // and it destroys the persistent breathing-tunnel effect." Every real
+    // hit, any ring, owned or merely passed -- see
+    // captureStandingGeneration's own comment for the full "why" (this
+    // used to be given-owned-only, which could stay silent for the whole
+    // phrase if given's tier rarely owns anything).
+    this.captureStandingGeneration(vp.standingHitIncrementStrength);
   }
 
   render({ ringLabelsAtSpoke, transposition, hullCursorByRing, ringHitFlash, masterRotationOffset, ringDialOffsets, droneBreathHz = 0 }) {
@@ -1297,12 +1328,12 @@ export class WheelView {
     // Drawn FIRST so the more active hit echoes below read as layered on
     // top of this steady backdrop, not competing with it.
     this._standingGenerations = this._standingGenerations.filter(
-      (gen) => vpStanding.standingBaseAlpha * Math.exp(-Math.max(0, this._standingDepth(gen, now)) * vpStanding.standingFadeRate) > 0.008
+      (gen) => vpStanding.standingBaseAlpha * (gen.strengthMult ?? 1) * Math.exp(-Math.max(0, this._standingDepth(gen, now)) * vpStanding.standingFadeRate) > 0.008
     );
     for (const gen of this._standingGenerations) {
       const depth = this._standingDepth(gen, now);
       if (depth < -0.98) continue; // still peeling off the live trace, nothing to show yet
-      const alpha = vpStanding.standingBaseAlpha * Math.exp(-Math.max(0, depth) * vpStanding.standingFadeRate);
+      const alpha = vpStanding.standingBaseAlpha * (gen.strengthMult ?? 1) * Math.exp(-Math.max(0, depth) * vpStanding.standingFadeRate);
       if (alpha <= 0.008) continue;
       for (const ring of Object.keys(gen.snapshot)) {
         const spokes = gen.snapshot[ring];
