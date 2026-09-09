@@ -1381,12 +1381,13 @@ function wireTimbrePanel({ category, idPrefix, keys, setParam, defaults, presetS
 // Named once, referenced both by wireTimbrePanel below AND by the
 // export/import settings feature further down -- the SAME authoritative
 // key list either way, so the two can never drift apart.
-const NOTE_PANEL_KEYS = ["attackMs", "lowpassHz", "lowpassQ", "bodyHz", "bodyQ", "bodyAmountDb", "pluckAmount", "pluckMs"];
+const NOTE_PANEL_KEYS = ["attackMs", "lowpassHz", "lowpassQ", "bodyHz", "bodyQ", "bodyAmountDb", "pluckAmount", "pluckMs", "floorHz", "ceilingHz"];
 const DRONE_PANEL_KEYS = [
   "busGain",
   "breathPulsesPerCycle", "breathDepth", "vibratoCyclesPerPulse", "vibratoCents", "breathNoiseGain",
   "formantF1Q", "formantF2Q", "formantBlendGain",
-  "whistleHarmonic", "whistleHarmonicMin", "whistleHarmonicMax", "whistleGlideMs", "whistleNoteGateDipAmount",
+  "whistleHarmonic", "whistleHarmonicMin", "whistleHarmonicMax", "whistleFloorHz", "whistleCeilingHz",
+  "whistleGlideMs", "whistleNoteGateDipAmount",
   "whistleDetuneCents",
   "whistleAmount",
   "whistleVibratoRateHz", "whistleVibratoCents", "whistleVibratoAmpDepth",

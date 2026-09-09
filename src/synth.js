@@ -89,6 +89,26 @@ function quantizeFluteHz(hz, rootHz, scaleSemitones) {
   return rootHz * Math.pow(2, totalSemitones / 12);
 }
 
+// "The kalimba covers the high pitched melodic notes, I want the flute
+// drones to stay below a more contained ceiling to keep it from becoming
+// shrill/whistly." Each instrument's pitch used to be a product of several
+// independent multipliers (ring register, harmonic, voicing ratio,
+// transposition) with no shared concept of "this instrument's own range" --
+// this is that missing concept. Folds by whole OCTAVES rather than a hard
+// clamp, so a pitch that lands outside the authored window is re-voiced an
+// octave down/up instead of flattening onto the boundary note -- pitch
+// class and interval contour survive (the whole spoke->pitch design rests
+// on that), only the register moves. Falls back to a plain clamp only if
+// the window is too narrow to reach by whole octaves, so the function is
+// always total.
+function foldIntoRange(hz, floorHz, ceilingHz) {
+  if (!(hz > 0) || !(floorHz > 0) || !(ceilingHz > floorHz)) return hz;
+  let out = hz;
+  while (out > ceilingHz) out /= 2;
+  while (out < floorHz && out * 2 <= ceilingHz) out *= 2;
+  return Math.min(ceilingHz, Math.max(floorHz, out));
+}
+
 // Real flute note samples (assets/samples/flute-note-*.mp3, see
 // _loadRealFluteNoteBuffer and CREDITS.md) -- MULTISAMPLED, not one note
 // stretched across the whole range. One recorded C4 pitch-shifted via
@@ -149,6 +169,13 @@ export const DEFAULT_NOTE_PARAMS = {
   bodyAmountDb: 8,
   pluckAmount: 0.18,
   pluckMs: 18,
+  // The kalimba's own authored register -- see foldIntoRange, applied in
+  // playNote. Defaults to this voice's real current span (110-830.6Hz
+  // across the three rings) so factory default is a no-op; exposed so the
+  // two melodic instruments' ranges can be pushed apart from each other by
+  // ear, not just the flute's alone.
+  floorHz: 110,
+  ceilingHz: 831,
 };
 
 // Every knob the drone's voice touches -- "all the levers," not just the
@@ -252,6 +279,24 @@ export const DEFAULT_DRONE_PARAMS = {
   whistleHarmonic: 8,
   whistleHarmonicMin: 6,
   whistleHarmonicMax: 9,
+  // "I don't want the spacey, high pitched flute sound. The kalimba covers
+  // the high pitched melodic notes, I want the flute drones to stay below a
+  // more contained ceiling to keep it from becoming shrill/whistly." The
+  // real bug this traced to: ring register (0.5x-2x), harmonic (6-9),
+  // voicing ratio (up to 2x), and transposition (up to 1.8877x) all stack
+  // with no shared limit -- the flute could reach 2637Hz on a made-ring hit
+  // under transposition, 1.7 octaves above the kalimba's own ceiling, and
+  // at that extreme it was also pitch-shifting a mid-register flute sample
+  // by 4+ octaves (see FLUTE_SAMPLES/_pickFluteSample), which is what
+  // actually reads as thin/whistly. See foldIntoRange -- the whole voice
+  // (every voicing layer + the throat voice together, so the chord shape
+  // survives) folds by octaves into [floor, ceiling] instead. ~65Hz is the
+  // guttural throat-singing floor this file already targets
+  // (THROAT_LOW_REF_HZ's own researched kargyraa range); 523Hz (C5) is the
+  // "comfortable male singing range" ceiling from the same design goal --
+  // and it sits below the kalimba's own melodic register instead of above it.
+  whistleFloorHz: 65,
+  whistleCeilingHz: 523,
   whistleGlideMs: 20,
   // A small, fixed spread BETWEEN this ring's own cluster voices (real
   // independent pipes don't land on the exact same cent) -- see
@@ -781,6 +826,14 @@ export class OrphographAudio {
     // tick establishes the voice's own actual pace. A scalar now, not
     // ring-keyed -- one flute voice, one current brightness.
     this._whistleBrightnessMult = 1;
+    // Which ring's own register the shared flute voice is CURRENTLY
+    // registered to -- see _fluteTargetHz. Only meanderFlute (a real hit)
+    // ever changes this; every other site that needs the voice's own
+    // current pitch (brightness crossfade, sample re-pick, per-param
+    // retunes, the frame-rate level tick) reads it instead of assuming
+    // "received" the way those sites used to. "received" is the correct
+    // starting register before any real hit has ever fired.
+    this._whistleLastRing = "received";
 
     // The flute's own chamber root -- deliberately SEPARATE from the drone's
     // own anchor (_droneBaseHz, which stays fixed on O by settled law). A
@@ -840,6 +893,14 @@ export class OrphographAudio {
       whistleVoicing: DEFAULT_DRONE_PARAMS.whistleVoicing.map((v) => ({ ...v })),
       whistleScale: [...DEFAULT_DRONE_PARAMS.whistleScale],
     };
+    // _fluteTargetHz's own "current harmonic" state -- normally only ever
+    // set by a real hit (meanderFlute) or the manual whistleHarmonic slider
+    // (setDroneParam), but setDroneVoices's first-ever build computes the
+    // voice's starting pitch through that same shared method before either
+    // of those has fired once, so it needs a real starting value here, not
+    // undefined (which _fluteTargetHz would otherwise read as harmonic 0 --
+    // a silent flute on the very first drone start).
+    this._whistleHarmonicByRing = this.droneParams.whistleHarmonic;
 
     // Per-ring mute (setDroneMute) is retired -- "one driving bass drone,
     // one meandering flute narrative" means there's only one instance of
@@ -894,6 +955,73 @@ export class OrphographAudio {
     if (this.noteParams && key in this.noteParams) this.noteParams[key] = value;
   }
 
+  // The ONE place the flute's un-folded register formula lives -- every
+  // site that used to hand-recompute
+  // "rootHz * RING_OCTAVE_MULTIPLIER.received * harmonic" independently
+  // (construction, every setDroneParam case, the frame-rate brightness
+  // tick, sample re-picking) now reads this instead, which is what fixed
+  // two real bugs at once: those sites were all hardcoded to `.received`
+  // regardless of which ring actually last fired (this._whistleLastRing,
+  // set only by a real hit -- see meanderFlute), and any future fix to the
+  // formula only ever has one place to land. rootHz defaults to the
+  // transposition-aware live root; the two sites that retune mid-
+  // construction (setDroneVoices) pass the raw incoming baseHz explicitly,
+  // since _droneBaseHz isn't settled yet at that point.
+  _fluteTargetHz(rootHz = this._effectiveDroneBaseHz()) {
+    return rootHz * RING_OCTAVE_MULTIPLIER[this._whistleLastRing || "received"] * (this._whistleHarmonicByRing || 0);
+  }
+
+  // See foldIntoRange/whistleCeilingHz's own comment for the "why." Returns
+  // a single power-of-2 factor -- computed from the topmost and bottommost
+  // currently-SOUNDING voicing layers (level > 0; a silent slot shouldn't
+  // constrain the range) -- rather than folding each layer separately,
+  // because folding independently would let the 2x layer collapse onto the
+  // 1x layer and destroy the authored chord shape at the top of the range.
+  // Applying ONE shared factor to every layer (see _fluteFundamentalHz)
+  // keeps every layer's ratio to every other layer exactly what
+  // whistleVoicing authored, only the whole voice's register moves.
+  // Ceiling is the hard constraint (the loop that enforces it has no exit
+  // condition beyond "fits"); floor is honored whenever there's still room
+  // under the ceiling to fold up into -- with the factory defaults the
+  // voicing's own span (4x/2 octaves) fits comfortably inside the
+  // floor-ceiling window (65-523Hz is ~8x/3 octaves), so both hold.
+  _fluteFoldFactor(targetHz, dp = this.droneParams) {
+    if (!(targetHz > 0)) return 1;
+    const floorHz = dp.whistleFloorHz, ceilingHz = dp.whistleCeilingHz;
+    if (!(ceilingHz > floorHz && floorHz > 0)) return 1;
+    const activeRatios = (dp.whistleVoicing || [])
+      .filter((v) => v.level > 0 && v.ratio > 0)
+      .map((v) => v.ratio);
+    const maxRatio = activeRatios.length ? Math.max(...activeRatios) : 1;
+    const minRatio = activeRatios.length ? Math.min(...activeRatios) : 1;
+    let shift = 0;
+    while (targetHz * maxRatio * Math.pow(2, shift) > ceilingHz && shift > -24) shift--;
+    while (targetHz * minRatio * Math.pow(2, shift) < floorHz &&
+           targetHz * maxRatio * Math.pow(2, shift + 1) <= ceilingHz && shift < 24) shift++;
+    return Math.pow(2, shift);
+  }
+
+  // The voice's own actual current fundamental -- _fluteTargetHz folded as
+  // a whole into [whistleFloorHz, whistleCeilingHz]. This is what every
+  // layer/throat-partial pitch should now be computed FROM (multiply by
+  // that layer's own ratio, same as before the fold existed).
+  _fluteFundamentalHz(rootHz = this._effectiveDroneBaseHz()) {
+    const targetHz = this._fluteTargetHz(rootHz);
+    return targetHz * this._fluteFoldFactor(targetHz);
+  }
+
+  // Quantize-then-safety-clamp for one sounding layer (or the throat
+  // voice, octaveMult 1). The fold above already keeps the UNQUANTIZED
+  // voice inside range; quantizeFluteHz can nudge an individual layer up
+  // to ~1.5 semitones (~9%) off that when it snaps to the nearest scale
+  // degree, which is small enough to just clamp flat rather than re-fold a
+  // whole octave over a few Hz of quantization wobble.
+  _fluteLayerHz(targetHz, octaveMult, rootHz = this._effectiveDroneBaseHz()) {
+    const dp = this.droneParams;
+    const quantized = quantizeFluteHz(targetHz * octaveMult, rootHz, dp.whistleScale);
+    return Math.min(dp.whistleCeilingHz, Math.max(dp.whistleFloorHz, quantized));
+  }
+
   // Recomputes every level-dependent gain on ONE flute tone layer from
   // the current droneParams, including the breath-tone coupling depths --
   // several params (whistleAmount, whistleHarmonic2/3Amount,
@@ -923,7 +1051,7 @@ export class OrphographAudio {
     const glide = (param, v) => param.setTargetAtTime(v, now, 0.08);
     const ls = layer.levelScale;
     const brightness = this._whistleBrightnessMult;
-    const targetHz = this._effectiveDroneBaseHz() * RING_OCTAVE_MULTIPLIER.received * (this._whistleHarmonicByRing || 0);
+    const targetHz = this._fluteFundamentalHz();
     const layerHz = targetHz * layer.octaveMult;
     glide(layer.toneGain.gain, dp.whistleAmount * ls);
     glide(layer.toneColorFilter.frequency, this._toneColorHzFor(layerHz, dp.whistleToneColorRatio, brightness));
@@ -994,7 +1122,7 @@ export class OrphographAudio {
     // register-character shift is meant to read as "meandering," not a
     // snap.
     if (dv.whistleGrowlF1Gain) {
-      const targetHz = this._effectiveDroneBaseHz() * RING_OCTAVE_MULTIPLIER.received * (this._whistleHarmonicByRing || 0);
+      const targetHz = this._fluteFundamentalHz();
       const t = targetHz > 0
         ? Math.min(1, Math.max(0,
             (Math.log2(targetHz) - Math.log2(lowRefHz)) / (Math.log2(highRefHz) - Math.log2(lowRefHz))))
@@ -1141,12 +1269,12 @@ export class OrphographAudio {
       // releveled -- a genuine live-editable voicing, not a fixed set of
       // named amounts.
       case "whistleVoicing": {
-        const targetHz = this._effectiveDroneBaseHz() * RING_OCTAVE_MULTIPLIER.received * this._whistleHarmonicByRing;
+        const targetHz = this._fluteFundamentalHz();
         dv.whistleLayers.forEach((layer, i) => {
           const voice = value[i] || WHISTLE_EMPTY_VOICE;
           layer.octaveMult = voice.ratio;
           layer.levelScale = voice.level;
-          const layerHz = quantizeFluteHz(targetHz * voice.ratio, this._effectiveDroneBaseHz(), this.droneParams.whistleScale);
+          const layerHz = this._fluteLayerHz(targetHz, voice.ratio);
           glide(layer.source.playbackRate, layerHz / layer.sampleBaseHz);
           this._applyFluteLayerLevel(dv, this.droneParams, i, now);
         });
@@ -1160,9 +1288,9 @@ export class OrphographAudio {
       // re-quantized against it immediately (the underlying target hasn't
       // moved, only where it gets snapped to).
       case "whistleScale": {
-        const targetHz = this._effectiveDroneBaseHz() * RING_OCTAVE_MULTIPLIER.received * this._whistleHarmonicByRing;
+        const targetHz = this._fluteFundamentalHz();
         dv.whistleLayers.forEach((layer) => {
-          const quantizedHz = quantizeFluteHz(targetHz * layer.octaveMult, this._effectiveDroneBaseHz(), value);
+          const quantizedHz = this._fluteLayerHz(targetHz, layer.octaveMult);
           glide(layer.source.playbackRate, quantizedHz / layer.sampleBaseHz);
         });
         break;
@@ -1170,7 +1298,7 @@ export class OrphographAudio {
       // Recomputes from the voice's own current pitch, not a flat number
       // -- see whistleBreathColorRatio.
       case "whistleBreathColorRatio": {
-        const targetHz = this._effectiveDroneBaseHz() * RING_OCTAVE_MULTIPLIER.received * this._whistleHarmonicByRing;
+        const targetHz = this._fluteFundamentalHz();
         glide(dv.whistleBreathColorFilter.frequency, this._breathColorHzFor(targetHz, value));
         break;
       }
@@ -1204,10 +1332,10 @@ export class OrphographAudio {
         // directly. Glides, same as a real letter-hit would, rather than
         // snapping.
         this._whistleHarmonicByRing = value;
-        const targetHz = this._effectiveDroneBaseHz() * RING_OCTAVE_MULTIPLIER.received * value;
+        const targetHz = this._fluteFundamentalHz();
         dv.whistleLayers.forEach((layer) => {
           const layerHz = targetHz * layer.octaveMult;
-          const quantizedHz = quantizeFluteHz(layerHz, this._effectiveDroneBaseHz(), this.droneParams.whistleScale);
+          const quantizedHz = this._fluteLayerHz(targetHz, layer.octaveMult);
           glide(layer.source.playbackRate, quantizedHz / layer.sampleBaseHz);
           glide(layer.toneColorFilter.frequency, this._toneColorHzFor(layerHz, this.droneParams.whistleToneColorRatio, this._whistleBrightnessMult));
         });
@@ -1381,7 +1509,8 @@ export class OrphographAudio {
     const glideTc = Math.max(0.02, dp.whistleGlideMs) / 1000;
 
     this._whistleHarmonicByRing = harmonic;
-    const targetHz = this._effectiveDroneBaseHz() * RING_OCTAVE_MULTIPLIER[ring] * harmonic;
+    this._whistleLastRing = ring;
+    const targetHz = this._fluteFundamentalHz();
 
     // Derived, not arbitrary -- "as many parameters as possible should
     // derive/infer timing from the wheel/input/transform state itself."
@@ -1423,7 +1552,7 @@ export class OrphographAudio {
       toneSurge.linearRampToValueAtTime(1 - dp.whistleNoteGateDipAmount, now + dipSec);
 
       const layerHz = targetHz * layer.octaveMult;
-      const quantizedHz = quantizeFluteHz(layerHz, this._effectiveDroneBaseHz(), dp.whistleScale);
+      const quantizedHz = this._fluteLayerHz(targetHz, layer.octaveMult);
       layer.source.playbackRate.setTargetAtTime(quantizedHz / layer.sampleBaseHz, now + dipSec, glideTc);
       layer.toneColorFilter.frequency.setTargetAtTime(
         this._toneColorHzFor(layerHz, dp.whistleToneColorRatio, this._whistleBrightnessMult), now + dipSec, glideTc);
@@ -1440,7 +1569,7 @@ export class OrphographAudio {
     // thing _updateFluteBrightness still owns -- this gate is a pure
     // multiplier on top of that, so the two never fight over one AudioParam.
     if (dv.whistleThroatGateGain) {
-      const throatFundamental = quantizeFluteHz(targetHz, this._effectiveDroneBaseHz(), dp.whistleScale);
+      const throatFundamental = this._fluteLayerHz(targetHz, 1);
       dv.whistleThroatOscs.forEach((p) => {
         p.osc.frequency.setTargetAtTime(throatFundamental * p.n, now + dipSec, glideTc);
       });
@@ -1476,7 +1605,10 @@ export class OrphographAudio {
     const colorFreq = dv.whistleBreathColorFilter.frequency;
     colorFreq.cancelScheduledValues(now);
     colorFreq.setValueAtTime(breathColorBase, now);
-    colorFreq.setValueAtTime(breathColorBase * (1 + dp.whistleChiffAmount), now + dipSec + attackSec);
+    // Re-clamp after the chiff boost -- _breathColorHzFor's own 8000Hz
+    // ceiling only bounds the STEADY value; multiplying it by (1+chiff)
+    // afterward could otherwise punch back through that ceiling.
+    colorFreq.setValueAtTime(Math.min(8000, breathColorBase * (1 + dp.whistleChiffAmount)), now + dipSec + attackSec);
     colorFreq.setTargetAtTime(breathColorBase, now + dipSec + attackSec, decayTc);
   }
 
@@ -1807,10 +1939,10 @@ export class OrphographAudio {
   _rebuildFluteToneCoreWithRealSample() {
     const dv = this.droneVoices;
     const dp = this.droneParams;
-    const targetHz = this._effectiveDroneBaseHz() * RING_OCTAVE_MULTIPLIER.received * (this._whistleHarmonicByRing || 0);
+    const targetHz = this._fluteFundamentalHz();
     dv.whistleLayers = dv.whistleLayers.map((oldLayer, i) => {
       oldLayer.source.stop();
-      const layerHz = quantizeFluteHz(targetHz * oldLayer.octaveMult, this._effectiveDroneBaseHz(), dp.whistleScale);
+      const layerHz = this._fluteLayerHz(targetHz, oldLayer.octaveMult);
       const sample = this._pickFluteSample(layerHz);
       const newLayer = buildFluteToneLayer(
         this.ctx, dp, oldLayer.octaveMult, oldLayer.levelScale, layerHz,
@@ -1872,6 +2004,11 @@ export class OrphographAudio {
     const ctx = this.ensureContext();
     const t0 = ctx.currentTime;
     const p = this.noteParams;
+    // The kalimba's own authored register -- see foldIntoRange. Applied
+    // here, once, so every call site (origin ping, melody/chord hits, the
+    // UI/keyboard preview, MIDI) is covered automatically rather than
+    // needing the same fold copied at each one.
+    hz = foldIntoRange(hz, p.floorHz, p.ceilingHz);
 
     // given left / received center / made right -- the same low-to-high,
     // slow-to-fast ring ordering used everywhere else here, expressed as a
@@ -2524,7 +2661,11 @@ export class OrphographAudio {
       // retune is where a real hit's ring actually shifts register), not
       // RING_RATIO (that table is retired from the flute entirely -- still
       // used by the drone's own per-event nudge, see pulseDrone).
-      const ringHz = baseHz * RING_OCTAVE_MULTIPLIER.received * dp.whistleHarmonic;
+      // this._whistleHarmonicByRing/_whistleLastRing aren't set yet on the
+      // very first build (still at their constructor defaults, "received"
+      // + whatever dp.whistleHarmonic is), so _fluteFundamentalHz reads
+      // exactly the pre-fold formula did here -- the fold itself is new.
+      const ringHz = this._fluteFundamentalHz(baseHz);
 
       // Authored voicing -- a fixed WHISTLE_MAX_VOICES slots, each sourced
       // from whistleVoicing[i] (silent WHISTLE_EMPTY_VOICE beyond the
@@ -2533,7 +2674,7 @@ export class OrphographAudio {
       const whistleLayers = [];
       for (let i = 0; i < WHISTLE_MAX_VOICES; i++) {
         const voice = dp.whistleVoicing[i] || WHISTLE_EMPTY_VOICE;
-        const layerHz = quantizeFluteHz(ringHz * voice.ratio, baseHz, dp.whistleScale);
+        const layerHz = this._fluteLayerHz(ringHz, voice.ratio, baseHz);
         const sample = this._pickFluteSample(layerHz);
         whistleLayers.push(buildFluteToneLayer(ctx, dp, voice.ratio, voice.level, layerHz, whistleVibratoLfo, wanderLowpass, sample, i));
       }
@@ -2756,10 +2897,10 @@ export class OrphographAudio {
       });
       // Flute -- same construction-time formula (RING_OCTAVE_MULTIPLIER's
       // center register, harmonic scalar), retuned to the new root.
-      const whistleTarget = baseHz * RING_OCTAVE_MULTIPLIER.received * this._whistleHarmonicByRing;
+      const whistleTarget = this._fluteFundamentalHz(baseHz);
       this.droneVoices.whistleLayers.forEach((layer) => {
         const layerHz = whistleTarget * layer.octaveMult;
-        const quantizedHz = quantizeFluteHz(layerHz, baseHz, dp.whistleScale);
+        const quantizedHz = this._fluteLayerHz(whistleTarget, layer.octaveMult, baseHz);
         layer.source.playbackRate.setTargetAtTime(quantizedHz / layer.sampleBaseHz, now, 0.08);
         layer.toneColorFilter.frequency.setTargetAtTime(
           this._toneColorHzFor(layerHz, dp.whistleToneColorRatio, this._whistleBrightnessMult), now, 0.08);
