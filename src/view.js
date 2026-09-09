@@ -171,6 +171,15 @@ export class WheelView {
     // the bar genuinely was as of the most recent frame, never a
     // separately-tracked or stale value.
     this._ringPhaseSpoke = { given: 1, received: 1, made: 1 };
+    // Live rim-dial rotation, updated every render() call -- see its own
+    // comment where render() sets it. Guarded here so a spawn method
+    // called before the first real render() has something sane to freeze.
+    this._currentRimOffset = 0;
+    // Same idea, per-ring (the bezel/phase-bar's own dials, distinct from
+    // the rim) -- a phase-bar echo needs to freeze ITS OWN ring's
+    // rotation, not the rim's, since the cursor it echoes rotates with
+    // the bezel, not the hull.
+    this._currentRingDialOffsets = { given: 0, received: 0, made: 0 };
     // "Luminosity of the projected/receding trace could correspond to
     // note hits or events, to create a continual, subtle and unified
     // visual feedback system." The shared anchor for the two rare,
@@ -282,7 +291,14 @@ export class WheelView {
   // frame at render time" (every hit/burst echo). Phase-bar echoes pass a
   // real, fixed value instead (that ring's own outer band edge), since
   // they emanate from the RING's own radius, not the trace's.
-  _spawnEcho(ring, trail, style, styleKind, direction, reach = 1, bornAt = performance.now(), baseR = null) {
+  // `rotationAtCapture`: frozen at spawn (defaults to the live rim dial,
+  // right for hit/burst echoes -- trace-derived, should match the hull);
+  // _spawnPhaseBarEcho overrides it with that ring's OWN dial instead
+  // (cursor-derived, should match the bezel it rides on). Either way, an
+  // echo's own rotation is fixed the instant it's born and never drifts
+  // afterward -- same "old traces remain in their drawn configuration"
+  // principle as captureStandingGeneration's own frozen offset.
+  _spawnEcho(ring, trail, style, styleKind, direction, reach = 1, bornAt = performance.now(), baseR = null, rotationAtCapture = this._currentRimOffset) {
     if (trail.length < 2) return;
     const spokes = (Number.isFinite(style.count) ? trail.slice(-style.count) : trail).map((v) => v.spoke);
     if (spokes.length < 2) return;
@@ -291,7 +307,7 @@ export class WheelView {
     // travel distance can be dialed in rather than baked in.
     const vp = this._viewParams;
     const to = direction === "in" ? 1 - reach * vp.echoReachIn : 1 + reach * vp.echoReachOut;
-    this._echoes.push({ ring, spokes, styleKind, bornAt, life: style.life, from: 1, to, strength: style.strength, baseR });
+    this._echoes.push({ ring, spokes, styleKind, bornAt, life: style.life, from: 1, to, strength: style.strength, baseR, rotationAtCapture });
     if (this._echoes.length > WheelView.ECHO_CAP) this._echoes.shift();
   }
 
@@ -433,7 +449,14 @@ export class WheelView {
       if (trail.length >= 2) snapshot[ring] = trail.map((v) => v.spoke);
     }
     if (Object.keys(snapshot).length > 0) {
-      this._standingGenerations.unshift({ snapshot, rank: 0, depthFrom: -1, depthEaseStartedAt: now });
+      // "Old traces remaining in their played/drawn configuration" -- a
+      // generation freezes the LIVE rim rotation at the moment it's
+      // captured (`rimOffsetAtCapture`), not the ever-changing current
+      // one. Without this, history would keep silently re-rotating to
+      // match whatever transposition state is true NOW, which is exactly
+      // the kind of drift this whole fix exists to prevent -- a snapshot
+      // of the past should stay anchored to the past.
+      this._standingGenerations.unshift({ snapshot, rank: 0, depthFrom: -1, depthEaseStartedAt: now, rimOffsetAtCapture: this._currentRimOffset });
       if (this._standingGenerations.length > maxGen) this._standingGenerations.pop();
     }
     // "[Phase bars] emanate echoes... inward at diagram-echo-level
@@ -469,7 +492,9 @@ export class WheelView {
     const ringDef = RINGS.find((r) => r.name === ring);
     const baseR = this.outerR * (ringDef ? ringDef.rTo : 1);
     const style = { life: vp.phaseBarEchoLife, strength: vp.phaseBarEchoStrength * strengthMult, count: 2 };
-    this._spawnEcho(ring, arc, style, "phasebar", direction, 1, performance.now(), baseR);
+    // Freezes THIS ring's own dial (not the rim) -- the cursor it echoes
+    // rides on the bezel, not the hull.
+    this._spawnEcho(ring, arc, style, "phasebar", direction, 1, performance.now(), baseR, this._currentRingDialOffsets[ring] || 0);
   }
 
   // Called from main.js's onPulse -- one real raw pulse IS this ring's own
@@ -505,9 +530,14 @@ export class WheelView {
     if (this.masterHull.length < 2) return;
     const vp = this._viewParams;
     const now = performance.now();
+    // Frozen at spawn, same "old traces remain in their drawn
+    // configuration" principle as every other echo -- this pass shows the
+    // trace as it WAS at this real moment, not silently re-rotating with
+    // whatever the live rim dial does during its own ~2s flight.
+    const rimOffsetAtCapture = this._currentRimOffset;
     this._hullEchoAges = [
-      { bornAt: now, life: vp.hullEchoLife, direction: "out", strengthMult },
-      { bornAt: now, life: vp.hullEchoLife, direction: "in", strengthMult },
+      { bornAt: now, life: vp.hullEchoLife, direction: "out", strengthMult, rimOffsetAtCapture },
+      { bornAt: now, life: vp.hullEchoLife, direction: "in", strengthMult, rimOffsetAtCapture },
     ];
   }
 
@@ -807,6 +837,18 @@ export class WheelView {
     // actually drawn beside. Reused below for the master hull too (see its
     // own comment) -- same rim dial, same real transposition-event trigger.
     const rimOffset = masterRotationOffset || 0;
+    // "They shouldn't be allowed to drift" -- stored on `this` so
+    // captureStandingGeneration/_spawnEcho/pulseHullEcho (all called from
+    // OUTSIDE render(), e.g. from recordVisit) can freeze the rotation
+    // that was genuinely live at the moment something is captured, rather
+    // than reading a stale value or none at all.
+    this._currentRimOffset = rimOffset;
+    // Same freezing purpose as _currentRimOffset above, but per-ring --
+    // read fresh from the SAME ringDialOffsets param the bezel/letters
+    // loop below uses, so it can never drift from what's actually drawn.
+    for (const ring of RINGS) {
+      this._currentRingDialOffsets[ring.name] = ringDialOffsets?.[ring.name] || 0;
+    }
     for (let s = 1; s <= SPOKE_COUNT; s++) {
       const groups = ringLabelsAtSpoke ? ringLabelsAtSpoke(s) : {};
       ctx.textAlign = "center";
@@ -897,12 +939,15 @@ export class WheelView {
     // genuinely varies by RECENCY within the trail -- the newest segment
     // reads close to the ring's own full color, older ones fade toward
     // the quiet background, instead of one flat dim alpha painted across
-    // the whole shape regardless of age.
+    // the whole shape regardless of age. Rotated by `rimOffset` -- the
+    // SAME live dial the master hull uses (see main.js's own fix
+    // comment on recordVisit) -- so the live trace and the hull can never
+    // drift apart; they read the identical number every frame.
     for (const ringName of Object.keys(this.persistentTraceByRing)) {
       const trail = this.persistentTraceByRing[ringName];
       if (trail.length < 1) continue;
       const glowColor = RING_MARKER_COLOR[ringName];
-      const at = (v) => spokePoint(v.spoke, baseRadius, cx, cy);
+      const at = (v) => spokePoint(v.spoke - rimOffset, baseRadius, cx, cy);
       const recencyOf = (i) => trail.length > 1 ? i / (trail.length - 1) : 1; // 0 = oldest, 1 = newest
       // "The circular vertex-markers are more of a distraction than a
       // source of information" -- removed; the connecting lines alone
@@ -930,21 +975,23 @@ export class WheelView {
     // was leaking into the tracer's own departure point). Falls back to a
     // plain dot at this ring's own rest position (spoke 1) until its first
     // real hit of the phrase. ringHitFlash briefly boosts it right as it
-    // crosses a real letter.
+    // crosses a real letter. Rotated by `rimOffset`, same as the
+    // persistent layer just above -- the tracer's own position must never
+    // read differently from the segment it's about to draw.
     for (const ringName of Object.keys(this.persistentTraceByRing)) {
       const glowColor = RING_MARKER_COLOR[ringName];
       const cursor = hullCursorByRing?.[ringName];
       let p = null;
       let fromP = null;
       if (cursor) {
-        fromP = spokePoint(cursor.fromSpoke, baseRadius, cx, cy);
-        const toP = spokePoint(cursor.toSpoke, baseRadius, cx, cy);
+        fromP = spokePoint(cursor.fromSpoke - rimOffset, baseRadius, cx, cy);
+        const toP = spokePoint(cursor.toSpoke - rimOffset, baseRadius, cx, cy);
         p = {
           x: fromP.x + (toP.x - fromP.x) * cursor.progress,
           y: fromP.y + (toP.y - fromP.y) * cursor.progress,
         };
       } else {
-        p = spokePoint(1, baseRadius, cx, cy);
+        p = spokePoint(1 - rimOffset, baseRadius, cx, cy);
       }
 
       // Real-time phase position, as a fractional SPOKE value (shortest-arc
@@ -1083,7 +1130,10 @@ export class WheelView {
           const r = baseRadius * scale;
           ctx.beginPath();
           spokes.forEach((s, i) => {
-            const pt = spokePoint(s, r, cx, cy);
+            // Frozen rotation (see captureStandingGeneration's own
+            // comment) -- NOT the live `rimOffset` -- so history stays
+            // exactly as it was drawn, not silently re-rotating with time.
+            const pt = spokePoint(s - gen.rimOffsetAtCapture, r, cx, cy);
             if (i === 0) ctx.moveTo(pt.x, pt.y);
             else ctx.lineTo(pt.x, pt.y);
           });
@@ -1122,7 +1172,9 @@ export class WheelView {
       ctx.globalAlpha = alpha;
       ctx.beginPath();
       echo.spokes.forEach((s, i) => {
-        const pt = spokePoint(s, r, cx, cy);
+        // Frozen at spawn (see _spawnEcho's own comment) -- not the live
+        // offset, so an already-in-flight echo never jumps mid-flight.
+        const pt = spokePoint(s - echo.rotationAtCapture, r, cx, cy);
         if (i === 0) ctx.moveTo(pt.x, pt.y);
         else ctx.lineTo(pt.x, pt.y);
       });
@@ -1160,7 +1212,7 @@ export class WheelView {
         ctx.globalAlpha = alpha;
         ctx.beginPath();
         this.masterHull.forEach((s, i) => {
-          const pt = spokePoint(s - rimOffset, r, cx, cy);
+          const pt = spokePoint(s - age.rimOffsetAtCapture, r, cx, cy);
           if (i === 0) ctx.moveTo(pt.x, pt.y);
           else ctx.lineTo(pt.x, pt.y);
         });
@@ -1171,9 +1223,9 @@ export class WheelView {
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           this.masterHull.forEach((s, i) => {
-            const pt = spokePoint(s - rimOffset, r, cx, cy);
+            const pt = spokePoint(s - age.rimOffsetAtCapture, r, cx, cy);
             ctx.fillStyle = "#f4ead0";
-            drawRadialText(ctx, this.masterHullLetters[i], pt.x, pt.y, s - rimOffset);
+            drawRadialText(ctx, this.masterHullLetters[i], pt.x, pt.y, s - age.rimOffsetAtCapture);
           });
         }
         ctx.globalAlpha = 1;
@@ -1201,7 +1253,9 @@ export class WheelView {
       ctx.globalAlpha = alpha;
       ctx.beginPath();
       echo.spokes.forEach((s, i) => {
-        const pt = spokePoint(s, r, cx, cy);
+        // Frozen at spawn (see _spawnEcho's own comment) -- not the live
+        // offset, so an already-in-flight echo never jumps mid-flight.
+        const pt = spokePoint(s - echo.rotationAtCapture, r, cx, cy);
         if (i === 0) ctx.moveTo(pt.x, pt.y);
         else ctx.lineTo(pt.x, pt.y);
       });

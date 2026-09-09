@@ -607,27 +607,32 @@ const sequencer = new Sequencer({
     const owned = target.isRest || tier === undefined || tier === ring;
     const velocity = target.isRest ? 0 : owned ? 1 : 1 - tierEmphasis;
     if (!target.isRest) {
-      // "The trace never actually adjusts to a new transform as it is
-      // drawn." A real gap, not a decorative miss -- transposedSpoke() has
-      // always driven what's actually SOUNDED (hzForSpoke below), but the
-      // DRAWN geometry kept using the raw canonical spoke regardless, so
-      // the visual trace never reflected the one thing that's actually
-      // audibly happening to the pitch. Drawing the transposed spoke here
-      // means new segments genuinely warp with the live transposition
-      // state as they're recorded, not just in a transient echo. The
-      // tracer's own glide destination is transposed too (`next.spoke`
-      // stays canonical for its REAL pulse-count timing -- that's the
-      // sequencer's actual physical geometry -- only the DISPLAY endpoint
-      // is transposed), so the dot visibly arrives exactly where the new
-      // segment is drawn, never mismatched.
-      const drawSpoke = transposedSpoke(target.spoke);
-      view.recordVisit(ring, drawSpoke, owned);
+      // "I'm noticing a disparity in the rotation of the master hull and
+      // the actual trace being drawn... they shouldn't be allowed to
+      // drift." Root cause, found by tracing exactly where each signal
+      // comes from: this used to draw at transposedSpoke() -- the INSTANT,
+      // un-eased transposition value -- while the master hull/bezel/
+      // letters all rotate through the EASED rim/ring dials (main.js's
+      // makeDial/stepDial), which take real time (900-2000ms) to settle
+      // after every step. For that whole settle window, the trace jumped
+      // instantly to its new position while the hull was still easing
+      // toward it -- a genuine, structural mismatch, not a rendering
+      // glitch. Fixed at the root: this now records the RAW canonical
+      // spoke (same as every other structural element), and view.js
+      // applies the SAME live rim dial (masterRotationOffset) to the
+      // trace/tracer that it already applies to the hull -- one shared
+      // rotation source, so they cannot drift apart by construction. The
+      // actual SOUND still transposes instantly (hzForSpoke below is
+      // untouched) -- only the drawn geometry now waits on the same real
+      // dial as everything else it's drawn alongside.
+      view.recordVisit(ring, target.spoke, owned);
       // Tracer -- glide from here toward whichever real hit comes next in
       // the WHOLE trace (no longer filtered to this ring's own tier), so
-      // the stylus sweeps the complete shape too.
+      // the stylus sweeps the complete shape too. Canonical spoke, same
+      // reasoning as recordVisit above -- view.js rotates it at draw time.
       const next = nextTraceHit(currentTrace, traceIndex, target.spoke, currentWords);
       hullCursor[ring] = next
-        ? { fromSpoke: drawSpoke, toSpoke: transposedSpoke(next.spoke), totalPulses: next.pulses, pulsesElapsed: 0, lastPulseTime: performance.now() }
+        ? { fromSpoke: target.spoke, toSpoke: next.spoke, totalPulses: next.pulses, pulsesElapsed: 0, lastPulseTime: performance.now() }
         : null;
       // A genuine brightness pulse on the tracer right as it crosses a
       // real letter -- "a fading oscilloscope-like tracer." Fires on every
@@ -724,10 +729,11 @@ const sequencer = new Sequencer({
     // Note-to-note trace -- the whole word's own shape, every letter in
     // order, regardless of whether it also sounds on this ring (see
     // onNoteHit's identical reasoning). `owned` marks which vertices this
-    // ring actually strikes, for view.js's bright/dim illumination. Drawn
-    // transposed, same as onNoteHit -- the trace tracks what's actually
-    // sounding.
-    word.forEach((e) => view.recordVisit(ring, transposedSpoke(e.spoke), entryVelocity(e) === 1));
+    // ring actually strikes, for view.js's bright/dim illumination.
+    // Canonical spoke, same reasoning as onNoteHit's own fix -- view.js
+    // rotates it via the same live rim dial the master hull uses, so the
+    // two can never drift apart.
+    word.forEach((e) => view.recordVisit(ring, e.spoke, entryVelocity(e) === 1));
     // Resultant-rhythm percussion -- one hit per struck chord (a chord is
     // a single rhythmic event, same "once per chord, not once per letter"
     // convention meanderFlute/ringHitFlash already use in chord mode
@@ -742,8 +748,8 @@ const sequencer = new Sequencer({
     const nextWord = currentWords[(wordIndex + 1) % currentWords.length];
     hullCursor[ring] = nextWord && nextWord.length
       ? {
-          fromSpoke: transposedSpoke(word[word.length - 1].spoke),
-          toSpoke: transposedSpoke(nextWord[0].spoke),
+          fromSpoke: word[word.length - 1].spoke,
+          toSpoke: nextWord[0].spoke,
           totalPulses: pulseLength,
           pulsesElapsed: 0,
           lastPulseTime: performance.now(),
