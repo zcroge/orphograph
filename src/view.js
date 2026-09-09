@@ -118,7 +118,11 @@ function drawRadialText(ctx, text, x, y, effectiveSpoke) {
 // This is now the ONLY place ring hue appears anywhere in the drawing --
 // see WHEEL_PALETTE above for the full "why."
 const RING_MARKER_COLOR = {
-  given: "#ffcf3d",
+  // "The yellow color needs to be more of a true yellow than the current
+  // orange." #ffcf3d sits at hue ~45 deg (amber/gold, reading as orange
+  // against the black field) -- shifted to hue ~54 deg, unmistakably
+  // yellow, same luminous full-saturation treatment as the other two.
+  given: "#ffe022",
   received: "#34b3ff",
   made: "#3ee87a",
 };
@@ -468,33 +472,41 @@ export class WheelView {
     }
   }
 
-  // Small local arc (not a bare point -- same "never a bare point"
-  // discipline as every other echo in this file) centered on this ring's
-  // CURRENT phase-bar position -- "I'd like the radial timekeeping cursor
-  // itself to emit echoes." `direction`: "out" on a real time-based event
-  // (a spoke pass, or a reversal -- see pulsePhaseBarPulse/
+  // "The time cursors' echoes should directly reference their true shape
+  // and orientation/position, not an arbitrary horizontal bar." Real bug:
+  // this used to build a two-point TANGENTIAL arc (`{spoke: spoke-width},
+  // {spoke: spoke+width}`) and hand it to the same trail-of-spokes-at-one-
+  // radius renderer hit/burst echoes use -- which draws a short horizontal-
+  // ish chord across neighboring spokes, nothing like the cursor's own
+  // actual shape (a RADIAL line spanning this ring's full band, tip to
+  // hub-ward edge). Fixed by giving the phasebar kind its own geometry --
+  // one spoke plus that ring's own [rFrom, rTo] band -- and its own render
+  // branch (see render()) that draws the SAME radial-line shape as the
+  // live cursor, scaled as a rigid unit toward/away from center as it
+  // propagates, instead of reusing the tangential-arc shape built for a
+  // curved trace segment. `direction`: "out" on a real time-based event (a
+  // spoke pass, or a reversal -- see pulsePhaseBarPulse/
   // pulsePhaseBarReversal below) or "in" at diagram-echo-level intervals
-  // (captureStandingGeneration, above). `strengthMult`/`widthMult` let a
-  // reversal read as a distinctly bigger moment than a routine spoke
-  // pass, same "real events get real weight" convention burst waves and
-  // the hull echo already use. Deliberately its OWN styleKind
-  // ("phasebar") -- rendered near-white like the cursor itself, not
-  // ring-hued like hit/burst echoes, so the "timekeeping" layer reads as
-  // visually distinct from the trace/echo layer it rides alongside.
+  // (captureStandingGeneration, above). `strengthMult` scales brightness;
+  // `widthMult` now scales the radial line's own stroke THICKNESS (there's
+  // no tangential "width" left to widen) so a reversal still reads as a
+  // distinctly bigger moment than a routine spoke pass.
   _spawnPhaseBarEcho(ring, direction, strengthMult = 1, widthMult = 1) {
     const spoke = this._ringPhaseSpoke[ring];
     if (spoke == null) return;
-    const vp = this._viewParams;
-    const width = vp.phaseBarArcWidth * widthMult;
-    const arc = [{ spoke: spoke - width }, { spoke: spoke + width }];
-    // Emanates from THIS ring's own outer band edge, not the trace's
-    // baseRadius -- the bar lives at the ring, so its echo should too.
     const ringDef = RINGS.find((r) => r.name === ring);
-    const baseR = this.outerR * (ringDef ? ringDef.rTo : 1);
-    const style = { life: vp.phaseBarEchoLife, strength: vp.phaseBarEchoStrength * strengthMult, count: 2 };
-    // Freezes THIS ring's own dial (not the rim) -- the cursor it echoes
-    // rides on the bezel, not the hull.
-    this._spawnEcho(ring, arc, style, "phasebar", direction, 1, performance.now(), baseR, this._currentRingDialOffsets[ring] || 0);
+    if (!ringDef) return;
+    const vp = this._viewParams;
+    const to = direction === "in" ? 1 - vp.echoReachIn : 1 + vp.echoReachOut;
+    this._echoes.push({
+      ring, styleKind: "phasebar", spoke, ringFrom: ringDef.rFrom, ringTo: ringDef.rTo,
+      bornAt: performance.now(), life: vp.phaseBarEchoLife, from: 1, to,
+      strength: vp.phaseBarEchoStrength * strengthMult, widthMult,
+      // Freezes THIS ring's own dial (not the rim) -- the cursor it echoes
+      // rides on the bezel, not the hull.
+      rotationAtCapture: this._currentRingDialOffsets[ring] || 0,
+    });
+    if (this._echoes.length > WheelView.ECHO_CAP) this._echoes.shift();
   }
 
   // Called from main.js's onPulse -- one real raw pulse IS this ring's own
@@ -1041,7 +1053,7 @@ export class WheelView {
       // letting the FULL boost (up to 1.6) through is exactly what
       // previously read as "a big orb."
       ctx.beginPath();
-      ctx.arc(p.x, p.y, (3 + 1.5 * flashT) * Math.min(1.3, brightnessBoost), 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, (2.2 + 1.1 * flashT) * Math.min(1.3, brightnessBoost), 0, Math.PI * 2);
       ctx.fillStyle = glowColor;
       ctx.fill();
     }
@@ -1066,10 +1078,10 @@ export class WheelView {
     // visual indicator... a white bar that continuously travels around
     // every ring according to its phase." "The radial timekeeping cursor
     // itself" -- a real cursor now, not just a short tick: a thin radial
-    // line spanning that ring's own full band (inner to outer edge) with
-    // a small bright HEAD at its outer tip, the same dot-as-focal-point
-    // language the tracer already uses (just a distinct near-white, not
-    // ring-hued, color, so the timekeeping layer reads as its own thing).
+    // line spanning that ring's own full band (inner to outer edge), a
+    // distinct near-white, not ring-hued, color so the timekeeping layer
+    // reads as its own thing. No head/dot at the tip -- "completely
+    // un-asked for," removed; the line alone is the cursor.
     // At that ring's own real-time position (`_ringPhaseSpoke`), rotated
     // by the SAME per-ring dial the bezel/letters use, so it stays
     // visually locked to its own ring rather than drifting against a
@@ -1090,10 +1102,6 @@ export class WheelView {
       ctx.globalAlpha = 0.6;
       ctx.stroke();
       ctx.globalAlpha = 1;
-      ctx.beginPath();
-      ctx.arc(barTip.x, barTip.y, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = "#f4ead0";
-      ctx.fill();
     }
 
     // Standing generations -- the ambient background layer: rare, real
@@ -1160,14 +1168,39 @@ export class WheelView {
       if (now < echo.bornAt) continue;
       const t = (now - echo.bornAt) / echo.life;
       const eased = 1 - Math.pow(1 - t, 2);
-      const r = (echo.baseR ?? baseRadius) * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
       // "Should fade to black before disappearing more gradually" -- an
       // exponent > 1 keeps an echo visibly bright for longer, then tapers
       // off gently near the end of its life instead of a linear ramp that
       // reads as an abrupt cutoff.
       const alpha = echo.strength * Math.pow(1 - t, this._viewParams.echoFadeExponent);
       if (alpha <= 0.003) continue;
-      ctx.strokeStyle = echo.styleKind === "phasebar" ? "#f4ead0" : RING_MARKER_COLOR[echo.ring];
+
+      if (echo.styleKind === "phasebar") {
+        // The cursor's own true shape (see render()'s phase-bar cursor
+        // block below) -- a radial line spanning this ring's band, not a
+        // tangential arc. Both endpoints scale by the SAME travel factor,
+        // so the whole line recedes/emanates as a rigid radial unit,
+        // exactly the "one shared factor" idiom the standing tunnel above
+        // already uses for a whole captured shape.
+        const travel = (echo.from + (echo.to - echo.from) * eased) * breathPulse;
+        const spoke = echo.spoke - echo.rotationAtCapture;
+        const rIn = outerR * echo.ringFrom * travel;
+        const rOut = (outerR * echo.ringTo + 4) * travel;
+        const from = spokePoint(spoke, rIn, cx, cy);
+        const tip = spokePoint(spoke, rOut, cx, cy);
+        ctx.strokeStyle = "#f4ead0";
+        ctx.lineWidth = 1.25 * (echo.widthMult || 1);
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(tip.x, tip.y);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        continue;
+      }
+
+      const r = (echo.baseR ?? baseRadius) * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
+      ctx.strokeStyle = RING_MARKER_COLOR[echo.ring];
       ctx.lineWidth = 1;
       ctx.globalAlpha = alpha;
       ctx.beginPath();

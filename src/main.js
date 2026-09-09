@@ -545,8 +545,26 @@ const sequencer = new Sequencer({
       // trace within the active draw plane" -- given completing a full
       // pass IS a full-trace. Push everything currently on the flat plane
       // into the tunnel and clear it, so the next pass draws fresh.
-      view.retireTrace();
-      if (transpositionEnabled) advanceTransposition();
+      //
+      // "Transform motions don't appear to be triggering additional
+      // echoes." Real bug, root-caused: retireTrace() used to run
+      // unconditionally HERE, before advanceTransposition() below -- but
+      // advanceTransposition() reads the still-live trail to build its own
+      // transform/burst echoes (spawnTransposeEcho, pulseFigure), and
+      // ALSO ends with its own retireTrace() call. Calling it here first
+      // cleared the trail out from under advanceTransposition() every
+      // single time, so its echo-spawning always found an empty trail and
+      // silently produced nothing -- confirmed directly (0 transform/burst
+      // echoes across many transposition steps with this ordering,
+      // vs. a full spawn when the trail is still present). Only retire
+      // here when transposition is OFF (advanceTransposition never runs,
+      // so nothing else will); when it's on, advanceTransposition owns the
+      // entire spawn-then-retire sequence itself, in the right order.
+      if (transpositionEnabled) {
+        advanceTransposition();
+      } else {
+        view.retireTrace();
+      }
     }
   },
   onPulse: (ring, spoke) => {
