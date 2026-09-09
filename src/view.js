@@ -447,30 +447,45 @@ export class WheelView {
 
   // Small local arc (not a bare point -- same "never a bare point"
   // discipline as every other echo in this file) centered on this ring's
-  // CURRENT phase-bar position. `direction`: "out" on a real per-pulse
-  // time-based event (pulsePhaseBarPulse, called from main.js's onPulse)
-  // or "in" at diagram-echo-level intervals (captureStandingGeneration,
-  // above). Deliberately its OWN styleKind ("phasebar") -- rendered near-
-  // white like the bar itself, not ring-hued like hit/burst echoes, so the
-  // "timekeeping" layer reads as visually distinct from the trace/echo
-  // layer it rides alongside.
-  _spawnPhaseBarEcho(ring, direction) {
+  // CURRENT phase-bar position -- "I'd like the radial timekeeping cursor
+  // itself to emit echoes." `direction`: "out" on a real time-based event
+  // (a spoke pass, or a reversal -- see pulsePhaseBarPulse/
+  // pulsePhaseBarReversal below) or "in" at diagram-echo-level intervals
+  // (captureStandingGeneration, above). `strengthMult`/`widthMult` let a
+  // reversal read as a distinctly bigger moment than a routine spoke
+  // pass, same "real events get real weight" convention burst waves and
+  // the hull echo already use. Deliberately its OWN styleKind
+  // ("phasebar") -- rendered near-white like the cursor itself, not
+  // ring-hued like hit/burst echoes, so the "timekeeping" layer reads as
+  // visually distinct from the trace/echo layer it rides alongside.
+  _spawnPhaseBarEcho(ring, direction, strengthMult = 1, widthMult = 1) {
     const spoke = this._ringPhaseSpoke[ring];
     if (spoke == null) return;
     const vp = this._viewParams;
-    const arc = [{ spoke: spoke - vp.phaseBarArcWidth }, { spoke: spoke + vp.phaseBarArcWidth }];
+    const width = vp.phaseBarArcWidth * widthMult;
+    const arc = [{ spoke: spoke - width }, { spoke: spoke + width }];
     // Emanates from THIS ring's own outer band edge, not the trace's
     // baseRadius -- the bar lives at the ring, so its echo should too.
     const ringDef = RINGS.find((r) => r.name === ring);
     const baseR = this.outerR * (ringDef ? ringDef.rTo : 1);
-    this._spawnEcho(ring, arc, { life: vp.phaseBarEchoLife, strength: vp.phaseBarEchoStrength, count: 2 }, "phasebar", direction, 1, performance.now(), baseR);
+    const style = { life: vp.phaseBarEchoLife, strength: vp.phaseBarEchoStrength * strengthMult, count: 2 };
+    this._spawnEcho(ring, arc, style, "phasebar", direction, 1, performance.now(), baseR);
   }
 
   // Called from main.js's onPulse -- one real raw pulse IS this ring's own
-  // "relevant time-based event," so an outward echo here is a genuine,
-  // real-time tick, not a fabricated metronome.
+  // spoke pass (RingRunner.advance: a pulse is genuinely one spoke step),
+  // so an outward echo here is a real, routine tick, kept subtle.
   pulsePhaseBarPulse(ring) {
     this._spawnPhaseBarEcho(ring, "out");
+  }
+
+  // Called from main.js's onDirectionReversal -- a real, comparatively
+  // rare event (this ring's own sweep direction genuinely flipping), so
+  // its echo reads as a distinctly bigger moment than a routine spoke
+  // pass: stronger and wider, the same "real events get real weight"
+  // convention as everywhere else in this file.
+  pulsePhaseBarReversal(ring) {
+    this._spawnPhaseBarEcho(ring, "out", 2.2, 2.5);
   }
 
   // "The brief flashes of the trace schematic/blueprint outline should
@@ -1001,28 +1016,37 @@ export class WheelView {
     ctx.clip();
 
     // Per-ring phase bar -- "a continuous, interval-based timekeeping
-    // visual indicator in the outermost rings, a white bar that
-    // continuously travels around every ring according to its phase."
-    // Riding the outer edge of each of the 3 letter-bearing bands, at that
-    // ring's own real-time position (`_ringPhaseSpoke`, just computed
-    // above), rotated by the SAME per-ring dial the bezel/letters use, so
-    // it stays visually locked to its own ring rather than drifting
-    // against a rotating backdrop. Crisp, non-additive, thin -- "ideally
-    // they won't be too distracting from the main imagery."
+    // visual indicator... a white bar that continuously travels around
+    // every ring according to its phase." "The radial timekeeping cursor
+    // itself" -- a real cursor now, not just a short tick: a thin radial
+    // line spanning that ring's own full band (inner to outer edge) with
+    // a small bright HEAD at its outer tip, the same dot-as-focal-point
+    // language the tracer already uses (just a distinct near-white, not
+    // ring-hued, color, so the timekeeping layer reads as its own thing).
+    // At that ring's own real-time position (`_ringPhaseSpoke`), rotated
+    // by the SAME per-ring dial the bezel/letters use, so it stays
+    // visually locked to its own ring rather than drifting against a
+    // rotating backdrop. Crisp, non-additive -- "ideally they won't be
+    // too distracting from the main imagery."
     for (const ring of RINGS) {
       const ringOffset = ringDialOffsets?.[ring.name] || 0;
       const barSpoke = this._ringPhaseSpoke[ring.name] - ringOffset;
+      const rIn = outerR * ring.rFrom;
       const rOut = outerR * ring.rTo;
-      const barIn = spokePoint(barSpoke, rOut, cx, cy);
-      const barOut = spokePoint(barSpoke, rOut + 7, cx, cy);
+      const barFrom = spokePoint(barSpoke, rIn, cx, cy);
+      const barTip = spokePoint(barSpoke, rOut + 4, cx, cy);
       ctx.beginPath();
-      ctx.moveTo(barIn.x, barIn.y);
-      ctx.lineTo(barOut.x, barOut.y);
+      ctx.moveTo(barFrom.x, barFrom.y);
+      ctx.lineTo(barTip.x, barTip.y);
       ctx.strokeStyle = "#f4ead0";
-      ctx.lineWidth = 2;
-      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = 1.25;
+      ctx.globalAlpha = 0.6;
       ctx.stroke();
       ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.arc(barTip.x, barTip.y, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = "#f4ead0";
+      ctx.fill();
     }
 
     // Standing generations -- the ambient background layer: rare, real

@@ -807,6 +807,12 @@ const sequencer = new Sequencer({
   onDirectionReversal: (ring, spoke) => {
     audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: 0.9, velocity: 1.3, ring });
     audio.playPercussionHit(ring, { accent: true });
+    // "I'd like the radial timekeeping cursor itself to emit echoes,
+    // especially on events like reversals" -- a real, comparatively rare
+    // structural event (this ring's own sweep genuinely flipping
+    // direction), so its own echo reads as bigger than a routine spoke
+    // pass.
+    view.pulsePhaseBarReversal(ring);
   },
 });
 
