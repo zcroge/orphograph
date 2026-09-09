@@ -84,6 +84,21 @@ export const DEFAULT_VIEW_PARAMS = {
   phaseBarArcWidth: 0.4,         // how wide the bar/its echoes are, in spokes
   phaseBarEchoLife: 900,         // brief -- "won't be too distracting"
   phaseBarEchoStrength: 0.3,
+  // "The temporary trace paths... should fade away in a linear fashion as
+  // they're drawn" -- see recordVisit/_provisionalSegments. Short on
+  // purpose: a merely-passed connection is meant to read as fleeting, not
+  // linger anywhere near as long as a real owned segment does.
+  provisionalSegmentLife: 700,
+  provisionalSegmentStrength: 0.5,
+  // "A slight z-space offset between the three [rings], 3d-anaglyph-esque,
+  // to allow for ease of differentiation" -- all three rings' persistent
+  // trace + standing-tunnel content used to share the EXACT same radius,
+  // so overlapping same-spoke content from different rings blended into
+  // one indistinct line/mess. A small per-ring radius nudge as a fraction
+  // of the shared base radius (see _ringDepthOffset) -- given pulled
+  // slightly in, made pushed slightly out, received centered -- lets
+  // overlapping content separate into legible parallel traces instead.
+  ringDepthOffset: 0.012,
 };
 
 // Shortest-arc interpolation between two (possibly fractional) spoke
@@ -172,6 +187,40 @@ export class WheelView {
     // stable, always-readable record of what's actually been traced.
     this.persistentTraceByRing = { given: [], received: [], made: [] };
     this._persistentCapacity = WheelView.MAX_PERSISTENT_POINTS;
+    // "I only really see the green traces represented in the echoes --
+    // make sure all three rings are producing echoes properly." Real bug,
+    // root-caused: every echo-spawning path (hit-echo, burst waves,
+    // standing-generation snapshots) read its trail from
+    // `persistentTraceByRing`, which only ever receives a ring's OWNED
+    // hits (recordVisit's own "3 congruent traces" fix, phase history
+    // above). `_spawnEcho`/`captureStandingGeneration` both require
+    // `trail.length >= 2` -- so any ring whose tier owns few or no
+    // letters in a given phrase (a real, common case: letters cluster by
+    // place-of-articulation, not evenly across given/received/made) never
+    // reaches 2 points and silently never echoes AT ALL, for the entire
+    // phrase. This is that separate, always-appended full sweep (every
+    // real hit, owned or merely passed) -- exactly what "one whole trace,
+    // read three ways" already established every ring geometrically
+    // walks -- used ONLY as the echo/standing-generation SOURCE from here
+    // on, so every ring's own real activity keeps producing echoes
+    // regardless of how sparse its OWNED subset is. persistentTraceByRing
+    // itself is untouched -- the solid flat-plane line stays owned-only,
+    // preserving the differentiation that fix was for.
+    this._ringSweepTrail = { given: [], received: [], made: [] };
+    // "The temporary trace paths drawn between two points that don't
+    // actually comprise the true trace... currently just vanish
+    // immediately... their visual rendering should reflect their
+    // transience/provisionality, fading away linearly as they're drawn."
+    // One entry per merely-passed (unowned) hit -- see recordVisit --
+    // rendered dashed, fading LINEARLY (not eased, unlike everything else
+    // in this file) over a short life, then dropped for good. Genuinely
+    // temporary: never promoted into persistentTraceByRing, never
+    // captured into a standing generation as its own dashed segment --
+    // only its ENDPOINT lives on, as an ordinary point in
+    // `_ringSweepTrail` above, which is what makes it "reflected
+    // accurately" in the next echo without needing every echo to carry a
+    // dashed/solid distinction of its own.
+    this._provisionalSegments = [];
     // Each ring's own CURRENT real-time phase position (a plain spoke
     // number, continuously updated every render() call from the same
     // hullCursorByRing interpolation the tracer already uses) -- "a
@@ -258,6 +307,8 @@ export class WheelView {
 
   reset() {
     this.persistentTraceByRing = { given: [], received: [], made: [] };
+    this._ringSweepTrail = { given: [], received: [], made: [] };
+    this._provisionalSegments = [];
     this.masterHull = [];
     this._hullEchoAges = [];
     this._eventPulse = { amount: 0, startedAt: 0, life: 1 };
@@ -414,8 +465,10 @@ export class WheelView {
     // wave-to-wave, so the innermost/outermost ripple of a big burst still
     // reads as the loudest.
     const vp = this._viewParams;
-    for (const ring of Object.keys(this.persistentTraceByRing)) {
-      const trail = this.persistentTraceByRing[ring];
+    // Sourced from the full sweep -- see `_ringSweepTrail`'s own comment;
+    // same reasoning as captureStandingGeneration above.
+    for (const ring of Object.keys(this._ringSweepTrail)) {
+      const trail = this._ringSweepTrail[ring];
       if (trail.length < 2) continue;
       for (let wave = 0; wave < w.burstWaves; wave++) {
         const reach = (wave + 1) / w.burstWaves;
@@ -468,8 +521,12 @@ export class WheelView {
       gen.depthEaseStartedAt = now;
     }
     const snapshot = {};
-    for (const ring of Object.keys(this.persistentTraceByRing)) {
-      const trail = this.persistentTraceByRing[ring];
+    // Sourced from the full sweep, not the owned-only persistent line --
+    // see `_ringSweepTrail`'s own comment. Otherwise a ring whose tier
+    // owns few or no letters in this phrase would never reach 2 points
+    // and would silently drop out of every standing generation entirely.
+    for (const ring of Object.keys(this._ringSweepTrail)) {
+      const trail = this._ringSweepTrail[ring];
       if (trail.length >= 2) snapshot[ring] = trail.map((v) => v.spoke);
     }
     if (Object.keys(snapshot).length > 0) {
@@ -637,6 +694,18 @@ export class WheelView {
     return this.outerR * 0.42;
   }
 
+  // See DEFAULT_VIEW_PARAMS' own ringDepthOffset comment -- a small,
+  // fixed per-ring fraction (given negative/inward, received zero/
+  // centered, made positive/outward) applied to whatever shared radius a
+  // multi-ring layer is about to draw at, so same-spoke content from
+  // different rings separates into legible parallel traces instead of
+  // blending into one line.
+  static RING_DEPTH_SIGN = { given: -1, received: 0, made: 1 };
+  _ringDepthRadius(baseRadius, ring) {
+    const sign = WheelView.RING_DEPTH_SIGN[ring] ?? 0;
+    return baseRadius * (1 + sign * this._viewParams.ringDepthOffset);
+  }
+
   // Master hull -- the whole typed phrase's own shape, every non-rest
   // letter connected in order, regardless of which ring actually voices
   // it. A word whose letters happen to disperse across all three tiers can
@@ -687,6 +756,14 @@ export class WheelView {
   // three times.
   recordVisit(ring, spoke, owned = true) {
     const persistent = this.persistentTraceByRing[ring];
+    // See `_ringSweepTrail`'s own comment (constructor) -- every real hit,
+    // owned or not, so this ring's echo/standing-generation activity never
+    // silently goes dark just because its tier owns few or no letters in
+    // this particular phrase.
+    const sweep = this._ringSweepTrail[ring];
+    const previousSweepPoint = sweep.length ? sweep[sweep.length - 1] : null;
+    sweep.push({ spoke });
+    if (sweep.length > this._persistentCapacity) sweep.shift();
     if (owned) {
       persistent.push({ spoke });
       if (persistent.length > this._persistentCapacity) persistent.shift();
@@ -698,19 +775,34 @@ export class WheelView {
       // (every real given-tier hit, not once per 20-60s full loop) while
       // still never firing on a raw beat/pulse.
       if (ring === "given") this.captureStandingGeneration();
+    } else if (previousSweepPoint) {
+      // "The temporary trace paths drawn between two points that don't
+      // actually comprise the true trace... currently just vanish
+      // immediately on being fully drawn... their visual rendering should
+      // reflect their transience/provisionality, fading away linearly as
+      // they're drawn." The connecting segment this merely-passed hit just
+      // swept through -- provisional because it never earns a place in
+      // the solid persistent line above, but it DID just genuinely
+      // happen, so it gets an honestly-temporary mark of its own instead
+      // of nothing at all. See render()'s own dashed, linear-fade branch.
+      this._provisionalSegments.push({
+        ring, fromSpoke: previousSweepPoint.spoke, toSpoke: spoke,
+        bornAt: performance.now(), life: this._viewParams.provisionalSegmentLife,
+      });
+      if (this._provisionalSegments.length > 24) this._provisionalSegments.shift();
     }
     // "Every hit (even percussion hits) should be reflected by an
     // echo/emanation of some kind, with each echo always being a fresh,
     // accurate representation of the current state." Spawns regardless of
     // `owned` now -- a passed/ghost letter still fires a real percussion
     // hit (main.js's onNoteHit/onChordHit call audio.playPercussionHit
-    // unconditionally), so it gets a real echo too. Always drawn from
-    // whatever this ring's own trail CURRENTLY is (never a fabricated
-    // point) -- "activated letters... echoed backward fully into the echo
-    // space... ripple backward... into the vanishing point," always
-    // inward, whether or not THIS specific hit just grew the trail.
+    // unconditionally), so it gets a real echo too. Drawn from this ring's
+    // own full sweep (not the owned-only persistent line -- see
+    // `_ringSweepTrail`) so it's never starved for lack of owned points --
+    // "activated letters... echoed backward fully into the echo space...
+    // ripple backward... into the vanishing point," always inward.
     const vp = this._viewParams;
-    this._spawnEcho(ring, persistent, { life: vp.echoHitLife, strength: vp.echoHitStrength, count: WheelView.ECHO_COUNT.hit }, "hit", "in");
+    this._spawnEcho(ring, sweep, { life: vp.echoHitLife, strength: vp.echoHitStrength, count: WheelView.ECHO_COUNT.hit }, "hit", "in");
   }
 
   render({ ringLabelsAtSpoke, transposition, hullCursorByRing, ringHitFlash, masterRotationOffset, ringDialOffsets, droneBreathHz = 0 }) {
@@ -1012,7 +1104,8 @@ export class WheelView {
       const trail = this.persistentTraceByRing[ringName];
       if (trail.length < 1) continue;
       const glowColor = RING_MARKER_COLOR[ringName];
-      const at = (v, radiusMult) => spokePoint(v.spoke - rimOffset, baseRadius * radiusMult, cx, cy);
+      const ringRadius = this._ringDepthRadius(baseRadius, ringName);
+      const at = (v, radiusMult) => spokePoint(v.spoke - rimOffset, ringRadius * radiusMult, cx, cy);
       const recencyOf = (i) => trail.length > 1 ? i / (trail.length - 1) : 1; // 0 = oldest, 1 = newest
       // "The circular vertex-markers are more of a distraction than a
       // source of information" -- removed; the connecting lines alone
@@ -1032,6 +1125,35 @@ export class WheelView {
           ctx.globalAlpha = 1;
         }
       }
+    }
+
+    // Provisional segments -- "the temporary trace paths drawn between two
+    // points that don't actually comprise the true trace... should reflect
+    // their transience/provisionality, fading away linearly as they're
+    // drawn, instead of just vanishing." See recordVisit -- one per
+    // merely-passed hit, dashed (not solid, marking it as never destined
+    // for the persistent line), fading LINEARLY (unlike every eased fade
+    // elsewhere in this file -- deliberately plain and honest about being
+    // temporary, not softened). Dropped for good once its short life ends;
+    // its endpoint lives on only as an ordinary point in `_ringSweepTrail`.
+    this._provisionalSegments = this._provisionalSegments.filter((seg) => now - seg.bornAt < seg.life);
+    for (const seg of this._provisionalSegments) {
+      const t = (now - seg.bornAt) / seg.life;
+      const alpha = this._viewParams.provisionalSegmentStrength * (1 - t);
+      if (alpha <= 0.003) continue;
+      const r = this._ringDepthRadius(baseRadius, seg.ring);
+      const a = spokePoint(seg.fromSpoke - rimOffset, r, cx, cy);
+      const b = spokePoint(seg.toSpoke - rimOffset, r, cx, cy);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = RING_MARKER_COLOR[seg.ring];
+      ctx.lineWidth = 1.25;
+      ctx.setLineDash([3, 3]);
+      ctx.globalAlpha = alpha;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     }
 
     // The tracer -- "a fading oscilloscope-like tracer following the
@@ -1190,7 +1312,7 @@ export class WheelView {
         for (const dir of [1, -1]) {
           const scale = (1 + dir * (depth + 1) * vpStanding.standingStep) * breathPulse;
           if (scale <= 0.06) continue;
-          const r = baseRadius * scale;
+          const r = this._ringDepthRadius(baseRadius, ring) * scale;
           ctx.beginPath();
           spokes.forEach((s, i) => {
             // Frozen rotation (see captureStandingGeneration's own
@@ -1254,7 +1376,7 @@ export class WheelView {
         continue;
       }
 
-      const r = (echo.baseR ?? baseRadius) * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
+      const r = this._ringDepthRadius(echo.baseR ?? baseRadius, echo.ring) * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
       ctx.strokeStyle = RING_MARKER_COLOR[echo.ring];
       ctx.lineWidth = 1;
       ctx.globalAlpha = alpha;
@@ -1358,7 +1480,7 @@ export class WheelView {
       if (now < echo.bornAt) continue;
       const t = (now - echo.bornAt) / echo.life;
       const eased = 1 - Math.pow(1 - t, 2);
-      const r = (echo.baseR ?? baseRadius) * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
+      const r = this._ringDepthRadius(echo.baseR ?? baseRadius, echo.ring) * (echo.from + (echo.to - echo.from) * eased) * breathPulse;
       const alpha = echo.strength * Math.pow(1 - t, this._viewParams.echoFadeExponent);
       if (alpha <= 0.003) continue;
       ctx.strokeStyle = RING_MARKER_COLOR[echo.ring];
