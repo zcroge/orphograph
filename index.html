@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Orphograph -- prototype</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <h1>Orphograph <span class="sub">(working prototype -- see README.md for what's settled vs. placeholder)</span></h1>
+
+  <div class="layout">
+    <div class="wheel-frame">
+      <canvas id="wheel" width="700" height="700"></canvas>
+      <div id="legend-grid" class="legend-grid" title="Every letter, one equal-size square each -- a plain glanceable reference, ordered by spoke. Click to insert; hover for object/sound. The big keyboard panel below shows the same letters laid out in the wheel's own spoke/ring structure instead."></div>
+    </div>
+
+    <div class="panel">
+      <label>
+        Hyphen joins letters in a word (no rest). Space marks a word boundary (inserts a rest). e.g. <code>SH-O-R-E K-T</code>
+        <div class="input-highlight-wrap" title="Characters shown in red aren't recognized phonetic tokens (see README.md) -- a live preview of what play would flag/skip, so you can see the alphabet's actual sound coverage as you type instead of only after pressing play.">
+          <div id="input-backdrop" class="input-backdrop" aria-hidden="true"></div>
+          <input id="input" type="text" value="I-K-T O" spellcheck="false" autocomplete="off" />
+        </div>
+      </label>
+
+      <div class="row">
+        <select id="phrase-select"></select>
+        <button id="save-phrase">save current as...</button>
+        <button id="delete-phrase">delete selected</button>
+      </div>
+
+      <div class="row">
+        <button id="play">play</button>
+        <button id="stop">stop</button>
+        <button id="drone">drone: off</button>
+        <label class="inline" title="Mutes everything EXCEPT the flute's own output (bass drone, real-hit notes, hocket ghost-taps -- percussion deliberately stays audible, a structural layer rather than a competing melodic voice) -- for judging the growl/chamber/breath-wave/chamber-resonance layers on their own, without guessing at them underneath everything else.">
+          <input type="checkbox" id="flute-solo" /> solo flutes (mute everything else)
+        </label>
+        <label class="inline" title="Manual preview only, for the two primes with no typed token yet (horizontal, nub have no object/token per L8). Vertical is driven automatically whenever I is actually hit in a trace -- typing I overrides this control.">manual vowel preview
+          <select id="vowel-select">
+            <option value="neutral">neutral (oh, resting)</option>
+            <option value="horizontal">horizontal (earth) -- no token yet</option>
+            <option value="nub">nub (heaven) -- no token yet</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="response-procession" title="The Response operator (the-codex-v1.md / master-blueprint-v2.md): 'a SELECTED transformation of the call -- from {prime, inversion, retrograde, retrograde-inversion}, with rotation-by-seven as the conventional answer when no ground compels.' An open, ordered, arbitrary-length chain of steps -- each applies to the PREVIOUS stage to produce the next, and the whole procession weaves into one continuous playback. Zero steps (default) plays exactly the call, unchanged. Mirror bounces back to its own predecessor by default (an out-and-back, the way a reflection actually behaves); rotate/retrograde restate in series at the new stage -- override either with the 'bounce' checkbox per step.">
+        <div id="response-steps"></div>
+        <button type="button" id="response-add-step">+ add step</button>
+      </div>
+
+      <div class="row" title="'A cyclic pattern procession... cyclical transposition patterns... could drive this in a deliberate, grounded and self-resolving/musically satisfying way.' Advances the whole instrument's key center by the step below (mod 12) every time the GIVEN ring completes one full pass through the phrase -- at the default step of 7, this is literally the circle of fifths as a real-time process (visits all 12 positions, then resolves home). Shown live on the new outermost ring circumscribing the wheel. A different, decoupled layer from the step chain above -- this is a continuous real-time pitch offset, not a one-time structural transform.">
+        <label class="inline"><input type="checkbox" id="transposition-enabled" /> cyclic transposition</label>
+        <label class="inline">step (spokes)<input type="number" id="transposition-step" min="1" max="11" step="1" value="7" style="width: 48px;" /></label>
+      </div>
+
+      <div class="row ring-modes">
+        <label class="inline">given
+          <select id="mode-given"><option value="melody">melody</option><option value="chord">chord</option></select>
+        </label>
+        <label class="inline">received
+          <select id="mode-received"><option value="melody">melody</option><option value="chord">chord</option></select>
+        </label>
+        <label class="inline">made
+          <select id="mode-made"><option value="melody">melody</option><option value="chord">chord</option></select>
+        </label>
+      </div>
+
+      <label class="inline" title="Experiment: when the ring-tier gate mutes a hit (a ring's own sweep passes a letter belonging to a different tier), play a soft ring-tinted click instead of true silence -- three voices at different speeds already trade off who sounds and who rests at any given spoke (structurally a hocket, the medieval technique of splitting a line across voices); this makes that already-existing structure audible as rhythm instead of just sparser melody. Only heard at tier emphasis 1.0, where a passed letter is fully silent below.">
+        <input type="checkbox" id="ghost-taps" checked /> hocket ghost-taps (click on muted ring-tier hits)
+      </label>
+
+      <label title="1.0 = each ring only truly sounds its own tier (given/received/made), a passed letter silent -- the original hard gate. 0.0 = every ring voices the WHOLE phrase equally, in its own register. Between: a passed letter still sounds, quieter, so ring identity survives (a base-heavy phrase still leans on 'given') while every voice regains the complete phrase -- the same shape every ring's own drawn trail now traces regardless of this slider.">
+        tier emphasis (1 = tier-only, 0 = every ring voices the whole phrase) -- <span id="tier-emphasis-readout">1.00</span>
+        <input id="tier-emphasis" type="range" min="0" max="1" step="0.01" value="1" />
+      </label>
+
+      <label title="A universal grounding tempo, fixed rather than adjustable -- 72 BPM is the classic textbook average resting heart rate, the same steady, unwavering pulse Gojira ('The Art of Dying') and Meshuggah ('Clockworks') both run beneath otherwise complex/polymetric material. The 6:8:12 rings' own speeds derive from this one anchor; it no longer moves.">
+        ground tempo (fixed -- a resting heart-rate anchor) -- <span id="bpm-readout">0 BPM</span>
+      </label>
+
+      <label title="A real resultant rhythm (the West/Central African interlocking-bell technique) -- one kick/snare/hat kit built from all three rings' own asynchronous onsets, fired on every real hit regardless of tier emphasis or the ghost-taps checkbox above (a structural layer, not a competing melodic voice -- stays audible under flute-solo too). A distinct, louder accent marks every breath cycle (10s at the fixed ground tempo).">
+        percussion level -- <span id="percussion-level-readout">1.00</span>
+        <input id="percussion-level" type="range" min="0" max="1" step="0.01" value="1" />
+      </label>
+
+      <div class="row">
+        <button id="connect-midi">connect MIDI (MPK25)</button>
+        <span id="midi-status" class="status">not connected</span>
+      </div>
+
+      <details class="timbre-panel">
+        <summary>note timbre (marimba/harp -- string-like attack, not harsh; dull, rich wooden body) -- standing in for the physical instrument's real resonance, tune by ear</summary>
+        <div class="row timbre-presets">
+          <select id="note-preset-select"><option value="">(unsaved)</option></select>
+          <button id="note-preset-save">save as...</button>
+          <button id="note-preset-delete">delete</button>
+          <button id="note-preset-reset">factory default</button>
+        </div>
+        <div class="timbre-grid">
+          <label>attack (ms)<span class="rw"><input type="range" id="np-attackMs" min="1" max="100" value="8" step="1" /><input type="number" id="np-attackMs-n" min="1" max="100" value="8" step="1" /></span></label>
+          <label>lowpass (Hz, dull&harr;bright)<span class="rw"><input type="range" id="np-lowpassHz" min="300" max="6000" value="2200" step="10" /><input type="number" id="np-lowpassHz-n" min="300" max="6000" value="2200" step="10" /></span></label>
+          <label>lowpass Q<span class="rw"><input type="range" id="np-lowpassQ" min="0.1" max="3" value="0.7" step="0.05" /><input type="number" id="np-lowpassQ-n" min="0.1" max="3" value="0.7" step="0.05" /></span></label>
+          <label>body resonance (Hz)<span class="rw"><input type="range" id="np-bodyHz" min="100" max="1500" value="450" step="5" /><input type="number" id="np-bodyHz-n" min="100" max="1500" value="450" step="5" /></span></label>
+          <label>body resonance Q<span class="rw"><input type="range" id="np-bodyQ" min="0.5" max="10" value="3" step="0.1" /><input type="number" id="np-bodyQ-n" min="0.5" max="10" value="3" step="0.1" /></span></label>
+          <label>body resonance amount (dB)<span class="rw"><input type="range" id="np-bodyAmountDb" min="0" max="20" value="8" step="0.5" /><input type="number" id="np-bodyAmountDb-n" min="0" max="20" value="8" step="0.5" /></span></label>
+          <label>pluck/mallet amount<span class="rw"><input type="range" id="np-pluckAmount" min="0" max="1" value="0.18" step="0.02" /><input type="number" id="np-pluckAmount-n" min="0" max="1" value="0.18" step="0.02" /></span></label>
+          <label>pluck/mallet length (ms)<span class="rw"><input type="range" id="np-pluckMs" min="1" max="80" value="18" step="1" /><input type="number" id="np-pluckMs-n" min="1" max="80" value="18" step="1" /></span></label>
+        </div>
+      </details>
+
+      <details class="timbre-panel">
+        <summary>drone timbre (organ/talk-box hybrid -- one driving voice, ring-colored per hit, breathing + vibrato movement, formant color) -- every lever the drone touches, tune by ear</summary>
+        <div class="row timbre-presets">
+          <select id="drone-preset-select"><option value="">(unsaved)</option></select>
+          <button id="drone-preset-save">save as...</button>
+          <button id="drone-preset-delete">delete</button>
+          <button id="drone-preset-reset">factory default</button>
+        </div>
+        <div class="timbre-grid">
+          <div class="timbre-group-label">levels</div>
+          <label>overall drone level<span class="rw"><input type="range" id="dp-busGain" min="0" max="0.8" value="0.3" step="0.01" /><input type="number" id="dp-busGain-n" min="0" max="0.8" value="0.3" step="0.01" /></span></label>
+
+          <div class="timbre-group-label">movement (breathing = amplitude, vibrato = pitch -- off the master ground-tempo pulse, not any one ring's own)</div>
+          <label title="Pulses per breath cycle, off the master ground-tempo pulse -- not a free Hz value. Lower = faster breathing at any given procession speed.">breathing period (pulses/cycle)<span class="rw"><input type="range" id="dp-breathPulsesPerCycle" min="1" max="32" value="6" step="1" /><input type="number" id="dp-breathPulsesPerCycle-n" min="1" max="32" value="6" step="1" /></span></label>
+          <label>breathing depth<span class="rw"><input type="range" id="dp-breathDepth" min="0" max="0.4" value="0.18" step="0.01" /><input type="number" id="dp-breathDepth-n" min="0" max="0.4" value="0.18" step="0.01" /></span></label>
+          <label title="Vibrato cycles per master ground-tempo pulse -- not a free Hz value. Higher = faster wobble at any given procession speed.">vibrato rate (cycles/pulse)<span class="rw"><input type="range" id="dp-vibratoCyclesPerPulse" min="0.25" max="8" value="2" step="0.05" /><input type="number" id="dp-vibratoCyclesPerPulse-n" min="0.25" max="8" value="2" step="0.05" /></span></label>
+          <label>vibrato depth (cents)<span class="rw"><input type="range" id="dp-vibratoCents" min="0" max="60" value="20" step="1" /><input type="number" id="dp-vibratoCents-n" min="0" max="60" value="20" step="1" /></span></label>
+          <label>breath/buzz noise level<span class="rw"><input type="range" id="dp-breathNoiseGain" min="0" max="0.3" value="0.05" step="0.01" /><input type="number" id="dp-breathNoiseGain-n" min="0" max="0.3" value="0.05" step="0.01" /></span></label>
+
+          <div class="timbre-group-label">formant (talk-box vowel shaping)</div>
+          <label>formant 1 resonance (Q)<span class="rw"><input type="range" id="dp-formantF1Q" min="1" max="20" value="9" step="0.5" /><input type="number" id="dp-formantF1Q-n" min="1" max="20" value="9" step="0.5" /></span></label>
+          <label>formant 2 resonance (Q)<span class="rw"><input type="range" id="dp-formantF2Q" min="1" max="20" value="11" step="0.5" /><input type="number" id="dp-formantF2Q-n" min="1" max="20" value="11" step="0.5" /></span></label>
+          <label>formant presence<span class="rw"><input type="range" id="dp-formantBlendGain" min="0.2" max="3" value="1.25" step="0.05" /><input type="number" id="dp-formantBlendGain-n" min="0.2" max="3" value="1.25" step="0.05" /></span></label>
+
+          <div class="timbre-group-label" title="A real recorded flute note (pitch-shifted via playbackRate), not an additive oscillator stack -- see the tone-color slider below for why. Plus a separate, genuinely subordinate breath-noise layer, no feedback loop anywhere. One shared, persistent voice -- any ring's own real hit retunes it, offset by that ring's own register (given lowest, made highest), so the narrative is driven by all three tempos rather than tripled by them.">flute -- real sample tone core + subordinate breath (one shared, ring-colored voice)</div>
+          <div class="row">
+            <button id="whistle-audition" title="Turns the drone on if it isn't already, then triggers a real retune of the one shared flute voice immediately, at a fixed middling pitch -- hear the CURRENT slider settings right now, without typing a phrase or pressing play. Click again any time after moving a slider.">audition flute (hear current settings now)</button>
+          </div>
+          <label class="inline" title="When on, the live spoke position of the letter that was just hit picks which harmonic the shared voice glides to (between the min/max range below), the same cosine sweep already used for the drone's formant. When off, 'which harmonic' below is one fixed manual value.">
+            <input type="checkbox" id="whistle-follow" checked /> flute pitch follows the wheel
+          </label>
+          <label title="At the tonic's own ~39Hz, harmonic 8 lands the shared voice's own CENTER register around ~311Hz (a real hit then re-registers it by that ring's own octave: given ~156Hz, received ~311Hz, made ~622Hz) -- keep this in the roughly 2-16 range to stay within a standard vocal register instead of climbing into whistle-register territory.">which harmonic (manual, used when not following)<span class="rw"><input type="range" id="dp-whistleHarmonic" min="2" max="20" value="8" step="0.5" /><input type="number" id="dp-whistleHarmonic-n" min="2" max="20" value="8" step="0.5" /></span></label>
+          <label title="'The current levers... are pretty unintuitive and hard to work with -- is there a better solution that derives more informed selections, so it's less of a science experiment and more of a stylistic expression of established musical principles?' Picks Min/Max together by real vocal-register name instead of raw harmonic-index numbers. Still just sets the two sliders below -- hand-tune them afterward if you want, this is a starting point, not a lock.">register preset<span class="rw"><select id="whistle-register-preset"><option value="">(custom)</option><option value="bass">Bass/Baritone</option><option value="tenor" selected>Tenor/Alto</option><option value="alto">Alto/Soprano</option><option value="soprano">Soprano (bright)</option><option value="wide">Wide (full range)</option></select></span></label>
+          <label title="Roughly, the shared voice's own CENTER register (before a real hit's own ring-octave offset): harmonic x ~39Hz. Default 6 -> ~233Hz center (given ~117Hz, made ~467Hz once ring-registered). Narrowed from an earlier 1-16 default of 4: that range was only ever checked against the UNISON cluster layer, and the octave/fifth cluster (0.5x-2x around it) widens what actually reaches the ear by 2 more octaves on top -- a wider Min/Max span left almost no usable middle between 'dull' and 'shrill.'">flute range: lowest harmonic<span class="rw"><input type="range" id="dp-whistleHarmonicMin" min="1" max="16" value="6" step="1" /><input type="number" id="dp-whistleHarmonicMin-n" min="1" max="16" value="6" step="1" /></span></label>
+          <label title="Default 9 -> ~350Hz center register (given ~175Hz, made ~700Hz once ring-registered) -- soprano-ish, still within a standard vocal register, with real headroom left before the octave-up cluster layer gets shrill. Narrowed from 12 for the same reason as the min slider above -- a 1.5x span here (the SAME root-fifth-octave ratio reused a third time) leaves the harmonic knob a controllable slice of the register instead of most of it.">flute range: highest harmonic<span class="rw"><input type="range" id="dp-whistleHarmonicMax" min="4" max="24" value="9" step="1" /><input type="number" id="dp-whistleHarmonicMax-n" min="4" max="24" value="9" step="1" /></span></label>
+          <label title="NOT portamento -- real flute articulation changes pitch cleanly between fingerings, it doesn't slide. This just avoids a hard digital click at the transition; raising it far introduces an audible bend/lerp, which a real player's note-to-note playing doesn't have.">pitch transition (ms, click-avoidance only)<span class="rw"><input type="range" id="dp-whistleGlideMs" min="5" max="200" value="20" step="1" /><input type="number" id="dp-whistleGlideMs-n" min="5" max="200" value="20" step="1" /></span></label>
+          <label title="'There needs to be some kind of note envelope/gate per voice that allows seamless droning while a single tone is allowed to organically change notes with a proper flute-note-change sound profile.' A real flute doesn't retune in place -- a player's tongue briefly stops the air column between notes, which is also what hides the fingering change's own instability. This is how far the tone (and breath, together) duck before the new pitch and the attack -- 0 is the old smooth-retune behavior, higher is a more clearly tongued gap. Never reaches full silence, so the voice's own continuous drone still holds.">note-change gate depth (tongued dip)<span class="rw"><input type="range" id="dp-whistleNoteGateDipAmount" min="0" max="0.95" value="0.55" step="0.01" /><input type="number" id="dp-whistleNoteGateDipAmount-n" min="0" max="0.95" value="0.55" step="0.01" /></span></label>
+          <label title="A small, fixed spread BETWEEN this voice's own cluster voices (real independent pipes don't land on the exact same cent) -- alternating +/- by voice slot. Used to be within one voice's own oscillator pair back when the tone core was synthesized; a real recorded sample doesn't need synthetic shimmer the way a pure sine did.">voicing spread (cents, between cluster voices)<span class="rw"><input type="range" id="dp-whistleDetuneCents" min="0" max="20" value="5" step="0.5" /><input type="number" id="dp-whistleDetuneCents-n" min="0" max="20" value="5" step="0.5" /></span></label>
+          <label title="The tone core's own level -- this is the main 'how loud is the flute' control. This is the UNISON layer's own level; the two octave-doubling sliders below scale relative to it.">tone level<span class="rw"><input type="range" id="dp-whistleAmount" min="0" max="1" value="0.18" step="0.01" /><input type="number" id="dp-whistleAmount-n" min="0" max="1" value="0.18" step="0.01" /></span></label>
+          <label title="'The text field to author polyphony is pretty unintuitive -- is there a better solution, more of a stylistic expression of established musical principles?' Picks a real, named chord voicing (semitone intervals from the root, standard music theory, not raw frequency ratios) and fills the field below with it as a starting point.">chord voicing preset<span class="rw"><select id="whistle-chord-preset"><option value="">(custom)</option><option value="octaveStack" selected>Octave stack</option><option value="unison">Unison</option><option value="openFifths">Open fifths</option><option value="majorTriad">Major triad</option><option value="minorTriad">Minor triad</option><option value="sus4">Sus4</option><option value="add9">Add9</option><option value="wideSpread">Wide spread</option></select></span></label>
+          <label title="'We have harmonizing parameters, but not a GROUP of instruments whose harmonic relationships are parametrically authored -- that's the missing piece to our orchestral flute pad.' One authored voicing table instead of a separate named slider per interval. Format: comma-separated semitones:level pairs, e.g. '-12:0.6, 0:1, 7:0.6, 12:0.5' -- semitones is the interval from the voice's own root (0=unison, 7=a fifth, 12=an octave, negative=below root, same vocabulary as any chord chart), level is relative to tone level above. Add, remove, or retune a voice by editing this list directly; up to 6 voices. Press Enter or click away to apply -- or just pick a preset above.">voicing (semitones:level, semitones:level, ...)<span class="rw"><input type="text" id="dp-whistleVoicingText" value="-12:0.6, 0:1, 7:0.6, 12:0.5" style="width: 260px;" /></span></label>
+          <label class="inline" title="'Mode, key, progression could be derived intuitively from input alone, free of arbitrary user decision-making.' The wheel's own spoke-to-semitone mapping is already direct and linear -- when on, the shared scale every ring's pitch quantizes to (see below) is computed fresh from the actual letters in whatever's about to play: the unique spokes they land on, converted to semitones. A short/repetitive phrase naturally gives a narrower mode; a varied one gives a richer one -- the mode reflects what was actually typed instead of a standing manual choice. Falls back to whatever's in the scale field below if the current phrase touches no real letters.">
+            <input type="checkbox" id="scale-follows-input" checked /> scale follows typed input
+          </label>
+          <label title="Real, named modes (semitone sets from the root, standard music theory) as a starting point when 'scale follows input' above is off, or as the fallback it reverts to. Selecting one fills the field below."><span title="">mode preset</span><span class="rw"><select id="whistle-mode-preset"><option value="">(custom)</option><option value="majorPentatonic" selected>Major pentatonic</option><option value="minorPentatonic">Minor pentatonic</option><option value="ionian">Major (Ionian)</option><option value="aeolian">Natural minor (Aeolian)</option><option value="dorian">Dorian</option><option value="mixolydian">Mixolydian</option><option value="wholeTone">Whole tone</option><option value="chromatic">Chromatic (unconstrained)</option></select></span></label>
+          <label title="The shared scale (semitones from the drone's own root) EVERY ring's pitch snaps to, guaranteeing any combination stays consonant -- see the phase-26 'dissonant, chaotic' fix. Overridden live by 'scale follows input' above whenever that's on; edit directly (or via a mode preset) when it's off, or to change the fallback.">scale (semitones from root, comma-separated)<span class="rw"><input type="text" id="dp-whistleScaleText" value="0, 2, 4, 7, 9" style="width: 200px;" /></span></label>
+          <label title="'Is this a common issue people run into... is there a free asset we can use?' Yes -- the tone core is now a real recorded flute note (pitch-shifted), not an additive oscillator stack, so there's no separate harmonic-partial mix to dial anymore (the old 2nd/3rd-harmonic and metallic-shimmer sliders are gone -- a real sample already has its own natural harmonic character). This is the tone-color lowpass's baseline cutoff instead, as a multiple of whatever pitch is currently playing -- higher lets more of the sample's own brightness through, lower dulls/muffles it. Opens and closes further with playing energy -- see the brightness slider below.">tone color (x this voice's own pitch)<span class="rw"><input type="range" id="dp-whistleToneColorRatio" min="1" max="20" value="8" step="0.5" /><input type="number" id="dp-whistleToneColorRatio-n" min="1" max="20" value="8" step="0.5" /></span></label>
+
+          <div class="timbre-group-label" title="'I think we need multiple resonator chambers/resonant frequencies to adequately emulate polyphonic drone flutes.' A real flute's body resonances are FIXED by its physical geometry -- they don't move when you change fingering, unlike the tone-color filter above which tracks every note. This bank models the voice's own pipe as a real resonant tube: several fixed peaks at integer (or odd, for a stopped pipe) multiples of one fundamental, each quieter than the last. It only retunes when the phrase's own KEY changes (see 'chamber follows input root' below) -- 'a different flute for this section,' not a slider that follows the note.">flute chamber (fixed resonator bank)</div>
+          <label class="inline" title="'Real flautists have different drone flutes in different keys for a given song or section depending on the key being played.' The phrase's own root is already derived (the first non-rest letter's spoke -- see the 'root spoke' readout) and used to sit unused. When on, that root picks which fixed chamber the flute plays through for this phrase -- picking up the instrument built in this key, not retuning one instrument's body mid-note. When off, the chamber stays wherever it last was (initially the drone's own O anchor).">
+            <input type="checkbox" id="chamber-follows-input" checked /> chamber follows input root
+          </label>
+          <label title="Which harmonic series a real pipe of this construction actually speaks: 'open' (a transverse flute, every integer harmonic of the fundamental) or 'stopped' (a capped/drone pipe, odd harmonics only -- the hollower character)."><span title="">chamber pipe type</span><span class="rw"><select id="whistle-chamber-pipe"><option value="open" selected>Open (every harmonic)</option><option value="stopped">Stopped (odd harmonics)</option></select></span></label>
+          <label title="How many of this pipe's own resonant modes are actually active (fixed slots, up to 6) -- higher modes are already quieter on their own (amount/n below), so this mostly controls how much upper-mode color is present at all.">chamber modes (active count)<span class="rw"><input type="range" id="dp-whistleChamberModes" min="1" max="6" value="4" step="1" /><input type="number" id="dp-whistleChamberModes-n" min="1" max="6" value="4" step="1" /></span></label>
+          <label title="How strongly this pipe resonates at its own modes (mode 1's peak boost in dB; each higher mode rolls off as this / its own mode number, a real pipe's own falloff from radiation and wall losses).">chamber resonance amount (dB)<span class="rw"><input type="range" id="dp-whistleChamberAmountDb" min="0" max="20" value="6" step="0.5" /><input type="number" id="dp-whistleChamberAmountDb-n" min="0" max="20" value="6" step="0.5" /></span></label>
+          <label title="How narrow/sharp each mode's own resonant peak is -- higher reads as a harder-walled, more resonant pipe; lower is softer/breathier.">chamber mode sharpness (Q)<span class="rw"><input type="range" id="dp-whistleChamberQ" min="0.5" max="15" value="4" step="0.1" /><input type="number" id="dp-whistleChamberQ-n" min="0.5" max="15" value="4" step="0.1" /></span></label>
+
+          <div class="timbre-group-label" title="'The flute is missing a drone in ITSELF -- didgeridoo-like at the low end, wooden-flute-drone at the high end.' Two complementary, register-dependent modulation systems, crossfaded continuously by the voice's own current pitch against the real span this engine's own flute samples cover -- low notes lean toward growl, high notes toward a slow continuous breath-wave, derived from actual pitch, not a per-ring switch.">flute's own drone character (register-dependent growl / breath-wave)</div>
+          <label title="A didgeridoo-style vocal-tract growl, modeled on the drone's own F1/F2 talk-box formant pair -- just lower/throatier and deliberately rougher. This is the AUTHORED CEILING; how much of it is actually audible right now scales down toward zero as the currently-sounding pitch climbs toward this engine's highest real flute sample.">growl amount (low-register ceiling)<span class="rw"><input type="range" id="dp-whistleGrowlAmount" min="0" max="1" value="0.35" step="0.01" /><input type="number" id="dp-whistleGrowlAmount-n" min="0" max="1" value="0.35" step="0.01" /></span></label>
+          <label title="The growl formant pair's two center frequencies -- deliberately lower/throatier than the drone's own 350-1900Hz vowel range, closer to a low guttural 'ung' than a clear vowel.">growl formant 1 (Hz)<span class="rw"><input type="range" id="dp-whistleGrowlF1Hz" min="60" max="400" value="130" step="5" /><input type="number" id="dp-whistleGrowlF1Hz-n" min="60" max="400" value="130" step="5" /></span></label>
+          <label>growl formant 2 (Hz)<span class="rw"><input type="range" id="dp-whistleGrowlF2Hz" min="150" max="900" value="420" step="5" /><input type="number" id="dp-whistleGrowlF2Hz-n" min="150" max="900" value="420" step="5" /></span></label>
+          <label title="Shared by both growl bands, deliberately kept broad by default -- a real didgeridoo growl is rough, not pure. The chamber's own Q tuning pass just found that sharp/high-Q stacking is exactly what reads as clean/organ-like; this one knob is the whole 'how rough' control, on purpose.">growl sharpness (Q, shared both bands)<span class="rw"><input type="range" id="dp-whistleGrowlQ" min="0.5" max="15" value="3.5" step="0.1" /><input type="number" id="dp-whistleGrowlQ-n" min="0.5" max="15" value="3.5" step="0.1" /></span></label>
+          <label title="How fast the growl formants slowly wander/shift, mimicking a vocal tract changing shape -- a real, free-running rate, NOT locked to procession tempo (independent 'vocalization' movement, not tied to how fast the wheel is turning).">growl vocalization rate (Hz, free-running)<span class="rw"><input type="range" id="dp-whistleGrowlWanderHz" min="0.02" max="2" value="0.2" step="0.01" /><input type="number" id="dp-whistleGrowlWanderHz-n" min="0.02" max="2" value="0.2" step="0.01" /></span></label>
+          <label>growl vocalization depth (Hz)<span class="rw"><input type="range" id="dp-whistleGrowlWanderDepth" min="0" max="200" value="40" step="5" /><input type="number" id="dp-whistleGrowlWanderDepth-n" min="0" max="200" value="40" step="5" /></span></label>
+          <label title="A continuous, slow breathing wave on the voice's own gain -- modeled on the bass drone's own voiceLfo/breathPulsesPerCycle, giving the flute a 'still alive even when nothing is happening' presence the way a real held low wooden-flute/ney tone has. This is the AUTHORED CEILING; audibility scales UP as the currently-sounding pitch climbs (the opposite skew from growl above).">drone-wave depth (high-register ceiling)<span class="rw"><input type="range" id="dp-whistleDroneWaveDepth" min="0" max="0.4" value="0.12" step="0.01" /><input type="number" id="dp-whistleDroneWaveDepth-n" min="0" max="0.4" value="0.12" step="0.01" /></span></label>
+          <label title="Same 'musical subdivision, not a free Hz' idea as the bass drone's own breathPulsesPerCycle -- the drone-wave breathes once every N of the MASTER ground-tempo's own pulses (not any one ring's), so it speeds up/slows down with the procession rate exactly like the bass drone's breathing already does.">drone-wave cycle (master pulses per breath)<span class="rw"><input type="range" id="dp-whistleDroneWaveCyclesPerRingPulse" min="2" max="40" value="10" step="1" /><input type="number" id="dp-whistleDroneWaveCyclesPerRingPulse-n" min="2" max="40" value="10" step="1" /></span></label>
+
+          <div class="timbre-group-label" title="'I'd like our instrument to be able to reach from the lowest ranges of guttural human throat singing ranges, to a comfortable male singing range.' No real flute sample goes this low (the library floor is ~265Hz; the researched kargyraa floor is ~35-50Hz) -- this is a genuinely SYNTHESIZED voice (modeled on the bass drone's own proven additive-harmonic recipe) that fades in as pitch drops below the sample floor, fully replacing the sample voice by the kargyraa register. Purely additive -- the existing sample-covered range above is untouched.">throat voice (synthesized, below the sample floor)</div>
+          <label title="The throat voice itself -- an authored ceiling, scaled down to zero as the currently-sounding pitch climbs back up toward the sample library's own floor (~265Hz), where the real recorded flute voice is already reliable and takes back over.">throat voice amount (low-register ceiling)<span class="rw"><input type="range" id="dp-whistleThroatAmount" min="0" max="1" value="0.4" step="0.01" /><input type="number" id="dp-whistleThroatAmount-n" min="0" max="1" value="0.4" step="0.01" /></span></label>
+          <label title="The actual mechanism that defines kargyraa specifically -- the ventricular folds vibrating at HALF the vocal folds' rate, not an invented 'sub bass' effect. Same register scaling as the throat voice above; most audible right at the very bottom of the range.">kargyraa subharmonic amount<span class="rw"><input type="range" id="dp-whistleThroatSubharmonicAmount" min="0" max="1" value="0.5" step="0.01" /><input type="number" id="dp-whistleThroatSubharmonicAmount-n" min="0" max="1" value="0.5" step="0.01" /></span></label>
+
+          <label title="Real woodwind players drive a continuous, coupled pitch+amplitude wobble from breath pressure -- one of the strongest 'living, blown instrument' cues.">vibrato rate (Hz)<span class="rw"><input type="range" id="dp-whistleVibratoRateHz" min="1" max="10" value="5" step="0.1" /><input type="number" id="dp-whistleVibratoRateHz-n" min="1" max="10" value="5" step="0.1" /></span></label>
+          <label>vibrato pitch depth (cents)<span class="rw"><input type="range" id="dp-whistleVibratoCents" min="0" max="40" value="12" step="1" /><input type="number" id="dp-whistleVibratoCents-n" min="0" max="40" value="12" step="1" /></span></label>
+          <label title="Real breath vibrato couples pitch and loudness together, not just a clean pitch-only wobble.">vibrato amplitude depth<span class="rw"><input type="range" id="dp-whistleVibratoAmpDepth" min="0" max="0.3" value="0.06" step="0.01" /><input type="number" id="dp-whistleVibratoAmpDepth-n" min="0" max="0.3" value="0.06" step="0.01" /></span></label>
+          <label title="A separate, genuinely SUBORDINATE noise layer -- pink, not white (white noise is literally what static/hiss is; pink is the standard choice for natural wind/breath texture) -- not the excitation of a resonator, just breath riding on top of the clean tone. Kept low on purpose.">breath level (subordinate to tone)<span class="rw"><input type="range" id="dp-whistleBreathAmount" min="0" max="0.4" value="0.05" step="0.01" /><input type="number" id="dp-whistleBreathAmount-n" min="0" max="0.4" value="0.05" step="0.01" /></span></label>
+          <label title="'The breath dimension is just noise/static -- it doesn't sound good.' Root cause: this used to be one fixed Hz regardless of what pitch it was playing -- disconnected from the actual note, which is exactly what reads as generic static instead of THIS pipe's own air. Now a multiple of the voice's own current pitch (clamped 400-8000Hz) -- higher notes get brighter/airier noise, lower notes duller, the way a real player's breath actually does, retuned on every real hit right alongside the pitch.">breath color (x the voice's own pitch)<span class="rw"><input type="range" id="dp-whistleBreathColorRatio" min="1" max="15" value="5" step="0.1" /><input type="number" id="dp-whistleBreathColorRatio-n" min="1" max="15" value="5" step="0.1" /></span></label>
+          <label title="A brief breath-level bump right at a real hit, on top of the steady level -- 'breath renews here,' a tonguing/re-articulation moment, without dropping the sustained voice.">breath surge on hit<span class="rw"><input type="range" id="dp-whistleBreathSurgeAmount" min="0" max="1.5" value="0.4" step="0.01" /><input type="number" id="dp-whistleBreathSurgeAmount-n" min="0" max="1.5" value="0.4" step="0.01" /></span></label>
+          <label title="Real breath noise BRIGHTENS momentarily at the attack (more turbulence right as a note is re-tongued), not just louder -- this is how far the breath color opens up on a real hit, as a multiple of its own steady value, before settling back over the surge decay time below.">chiff (attack brightness)<span class="rw"><input type="range" id="dp-whistleChiffAmount" min="0" max="2" value="0.6" step="0.05" /><input type="number" id="dp-whistleChiffAmount-n" min="0" max="2" value="0.6" step="0.05" /></span></label>
+          <label title="'As many of our parameters as possible should derive/infer timing from the wheel/input/transform state itself, rather than apply arbitrary values.' The whole note-change gate (dip + attack + decay above) takes this fraction of the hit ring's OWN current pulse duration -- derived from the live procession rate, not a fixed ms -- so a fast procession gets snappy, tongued transitions and a slow one gets more relaxed ones.">note-change gate length (fraction of this ring's own pulse)<span class="rw"><input type="range" id="dp-whistleArticulationPulseFraction" min="0.05" max="1" value="0.35" step="0.01" /><input type="number" id="dp-whistleArticulationPulseFraction-n" min="0.05" max="1" value="0.35" step="0.01" /></span></label>
+          <label title="'It just sounds like an organ patch' -- an additive sine-harmonic stack IS a drawbar organ, structurally. This is the fix: the SAME breath wander already driving noise level also nudges the tone's own amplitude and harmonic brightness, and vibrato also gives the breath a small in-sync pulse -- tone and breath now wobble TOGETHER because they share a source, not as two independent layers that happen to both move.">breath &harr; tone coupling<span class="rw"><input type="range" id="dp-whistleBreathToneCoupling" min="0" max="1.5" value="0.5" step="0.01" /><input type="number" id="dp-whistleBreathToneCoupling-n" min="0" max="1.5" value="0.5" step="0.01" /></span></label>
+          <label title="A real hit already swells breath loudness and brightness (surge/chiff above); this makes it ALSO swell the TONE's own presence over the same window, so the pitched core re-articulates along with the breath instead of gliding smoothly underneath an independently-articulated noise layer.">tone articulation on hit<span class="rw"><input type="range" id="dp-whistleArticulationAmount" min="0" max="1.5" value="0.5" step="0.01" /><input type="number" id="dp-whistleArticulationAmount-n" min="0" max="1.5" value="0.5" step="0.01" /></span></label>
+          <label title="'The entire sound profile still reads as a digital pipe organ.' An organ pipe has no velocity/dynamics -- the SAME fixed tone speaks every time, hard-pressed or soft. A real player's breath energy constantly varies the tone's own brightness and breath noise TOGETHER, brighter when playing energetically, purer when calm. This makes the tone-color filter and breath-level sliders track the master ground-tempo's own BASELINE (at the reference pace below, not any one ring's own rate), scaled continuously by how fast the procession is currently moving -- how strongly tempo affects brightness. 0 = the old fixed behavior.">brightness follows tempo (organ fix)<span class="rw"><input type="range" id="dp-whistleBrightnessTempoSensitivity" min="0" max="3" value="1" step="0.05" /><input type="number" id="dp-whistleBrightnessTempoSensitivity-n" min="0" max="3" value="1" step="0.05" /></span></label>
+          <label title="The 'neutral' pace (in master ground-tempo pulses/sec) where brightness sits at exactly its slider values above -- faster than this brightens/airs the tone up, slower purifies it down.">brightness reference pace (pulses/sec)<span class="rw"><input type="range" id="dp-whistleBrightnessReferencePps" min="0.5" max="8" value="2" step="0.1" /><input type="number" id="dp-whistleBrightnessReferencePps-n" min="0.5" max="8" value="2" step="0.1" /></span></label>
+          <label title="One shared resonant peak the pipe speaks INTO -- 'a big box.' Same idea as the note voice's own wood-body resonance, reused here for the flute's own shared chamber.">box resonance (Hz)<span class="rw"><input type="range" id="dp-whistleBoxHz" min="40" max="400" value="90" step="1" /><input type="number" id="dp-whistleBoxHz-n" min="40" max="400" value="90" step="1" /></span></label>
+          <label>box resonance Q<span class="rw"><input type="range" id="dp-whistleBoxQ" min="0.5" max="12" value="2.5" step="0.1" /><input type="number" id="dp-whistleBoxQ-n" min="0.5" max="12" value="2.5" step="0.1" /></span></label>
+          <label>box resonance amount (dB)<span class="rw"><input type="range" id="dp-whistleBoxAmountDb" min="0" max="20" value="6" step="0.5" /><input type="number" id="dp-whistleBoxAmountDb-n" min="0" max="20" value="6" step="0.5" /></span></label>
+
+          <div class="timbre-group-label">sweep filter &amp; bass</div>
+          <label>sweep base cutoff (Hz)<span class="rw"><input type="range" id="dp-moveFilterHz" min="80" max="800" value="260" step="5" /><input type="number" id="dp-moveFilterHz-n" min="80" max="800" value="260" step="5" /></span></label>
+          <label title="Pulses per full sweep cycle, off the MASTER procession pulse rate (this sweep is shared/bus-wide, not per-ring) -- not a free Hz value.">sweep period (master pulses/cycle)<span class="rw"><input type="range" id="dp-moveFilterPulsesPerCycle" min="4" max="192" value="48" step="1" /><input type="number" id="dp-moveFilterPulsesPerCycle-n" min="4" max="192" value="48" step="1" /></span></label>
+          <label>sweep depth (Hz)<span class="rw"><input type="range" id="dp-moveFilterDepthHz" min="0" max="400" value="140" step="5" /><input type="number" id="dp-moveFilterDepthHz-n" min="0" max="400" value="140" step="5" /></span></label>
+          <label>bass boost corner (Hz)<span class="rw"><input type="range" id="dp-bassBoostHz" min="60" max="400" value="140" step="5" /><input type="number" id="dp-bassBoostHz-n" min="60" max="400" value="140" step="5" /></span></label>
+          <label>bass boost amount (dB)<span class="rw"><input type="range" id="dp-bassBoostDb" min="0" max="20" value="9" step="0.5" /><input type="number" id="dp-bassBoostDb-n" min="0" max="20" value="9" step="0.5" /></span></label>
+        </div>
+      </details>
+
+      <details class="timbre-panel">
+        <summary>trace/echo visuals (the standing echo tunnel, propagating hit/burst echoes, and the master-hull echo) -- tune by eye</summary>
+        <div class="row timbre-presets">
+          <select id="view-preset-select"><option value="">(unsaved)</option></select>
+          <button id="view-preset-save">save as...</button>
+          <button id="view-preset-delete">delete</button>
+          <button id="view-preset-reset">factory default</button>
+        </div>
+        <div class="timbre-grid">
+          <div class="timbre-group-label">standing echo tunnel (per-ring, continuous)</div>
+          <label title="how many past generations stay visible in the receding tunnel at once">generations visible<span class="rw"><input type="range" id="vp-standingMaxGenerations" min="1" max="20" value="8" step="1" /><input type="number" id="vp-standingMaxGenerations-n" min="1" max="20" value="8" step="1" /></span></label>
+          <label title="how long each fresh echo takes to settle/ease into its new rank when pushed by a new capture -- lower = snappier push">push settle (ms)<span class="rw"><input type="range" id="vp-standingAdvanceMs" min="100" max="3000" value="900" step="50" /><input type="number" id="vp-standingAdvanceMs-n" min="100" max="3000" value="900" step="50" /></span></label>
+          <label title="radial reach per depth unit -- how far each generation travels per step">reach per step<span class="rw"><input type="range" id="vp-standingStep" min="0.05" max="0.5" value="0.24" step="0.01" /><input type="number" id="vp-standingStep-n" min="0.05" max="0.5" value="0.24" step="0.01" /></span></label>
+          <label title="exponential fade rate -- lower = longer, more gradual fade to black">fade rate<span class="rw"><input type="range" id="vp-standingFadeRate" min="0.02" max="0.6" value="0.16" step="0.01" /><input type="number" id="vp-standingFadeRate-n" min="0.02" max="0.6" value="0.16" step="0.01" /></span></label>
+          <label title="brightness of a freshly-captured generation">base brightness<span class="rw"><input type="range" id="vp-standingBaseAlpha" min="0.05" max="1" value="0.42" step="0.01" /><input type="number" id="vp-standingBaseAlpha-n" min="0.05" max="1" value="0.42" step="0.01" /></span></label>
+
+          <div class="timbre-group-label">master hull echo (the whole-phrase blueprint + its glyphs)</div>
+          <label title="a brief one-shot pass, not an accumulating tunnel -- how long it lasts">echo life (ms)<span class="rw"><input type="range" id="vp-hullEchoLife" min="200" max="5000" value="1800" step="50" /><input type="number" id="vp-hullEchoLife-n" min="200" max="5000" value="1800" step="50" /></span></label>
+          <label>echo brightness<span class="rw"><input type="range" id="vp-hullEchoStrength" min="0.05" max="1.5" value="0.55" step="0.01" /><input type="number" id="vp-hullEchoStrength-n" min="0.05" max="1.5" value="0.55" step="0.01" /></span></label>
+          <label title="how far the brief pass travels outward/inward">echo reach<span class="rw"><input type="range" id="vp-hullEchoReach" min="0.05" max="1.5" value="0.5" step="0.05" /><input type="number" id="vp-hullEchoReach-n" min="0.05" max="1.5" value="0.5" step="0.05" /></span></label>
+
+          <div class="timbre-group-label">propagating echoes (per real note hit / sync-event bursts)</div>
+          <label title="how long a single note-hit's inward ripple lasts">hit echo life (ms)<span class="rw"><input type="range" id="vp-echoHitLife" min="200" max="5000" value="1900" step="50" /><input type="number" id="vp-echoHitLife-n" min="200" max="5000" value="1900" step="50" /></span></label>
+          <label>hit echo brightness<span class="rw"><input type="range" id="vp-echoHitStrength" min="0.05" max="1.5" value="0.55" step="0.01" /><input type="number" id="vp-echoHitStrength-n" min="0.05" max="1.5" value="0.55" step="0.01" /></span></label>
+          <label title="how long a sync-event (breath/convergence/transposition/stage) burst wave lasts">burst echo life (ms)<span class="rw"><input type="range" id="vp-echoBurstLife" min="200" max="5000" value="2200" step="50" /><input type="number" id="vp-echoBurstLife-n" min="200" max="5000" value="2200" step="50" /></span></label>
+          <label>burst echo brightness<span class="rw"><input type="range" id="vp-echoBurstStrength" min="0.05" max="1.5" value="0.7" step="0.01" /><input type="number" id="vp-echoBurstStrength-n" min="0.05" max="1.5" value="0.7" step="0.01" /></span></label>
+          <label title="how far a full-strength echo travels outward, toward the frame edge">outward reach<span class="rw"><input type="range" id="vp-echoReachOut" min="0.1" max="3" value="1.35" step="0.05" /><input type="number" id="vp-echoReachOut-n" min="0.1" max="3" value="1.35" step="0.05" /></span></label>
+          <label title="how far a full-strength echo travels inward, toward the hub">inward reach<span class="rw"><input type="range" id="vp-echoReachIn" min="0.1" max="1" value="0.92" step="0.02" /><input type="number" id="vp-echoReachIn-n" min="0.1" max="1" value="0.92" step="0.02" /></span></label>
+          <label title="&gt;1 = fade to black more gradually near the end of an echo's life, not an abrupt cutoff">fade gradualness<span class="rw"><input type="range" id="vp-echoFadeExponent" min="0.5" max="5" value="1.7" step="0.1" /><input type="number" id="vp-echoFadeExponent-n" min="0.5" max="5" value="1.7" step="0.1" /></span></label>
+
+          <div class="timbre-group-label">whole-tunnel breathing</div>
+          <label title="how much every echo's radius pulsates with the drone's own real breath rate">breath pulsation<span class="rw"><input type="range" id="vp-breathPulseAmount" min="0" max="0.2" value="0.035" step="0.005" /><input type="number" id="vp-breathPulseAmount-n" min="0" max="0.2" value="0.035" step="0.005" /></span></label>
+        </div>
+      </details>
+
+      <div class="readout">
+        <div>phase: <span id="phase">idle</span></div>
+        <div>status: <span id="status"></span></div>
+        <div><span id="root"></span></div>
+        <div id="unknown-warning" class="unknown-warning" hidden></div>
+      </div>
+
+      <div class="readout">
+        <div>grand convergence (all three rings landing on I at once -- a periodic conjunction, not a stop):</div>
+        <div id="loop-log" class="loop-log"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="keyboard-section">
+    <h2>Pictographic keyboard <span class="sub">legend + input + live highlight-on-activation -- an "unrolled" reading of the wheel: 12 spoke-columns, given/received/made rows plus a 4th for letters with no ring yet. Placeholder Latin labels for now (see README.md) -- hover a key for its object/sound and expected asset paths; a real glyph will start appearing automatically once one exists at that path.</span></h2>
+    <div id="keyboard" class="keyboard"></div>
+    <div class="row kbd-space-row">
+      <button id="kbd-space">&#9251; word boundary (space)</button>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

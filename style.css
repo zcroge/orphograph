@@ -1,0 +1,403 @@
+/* Dark theme overhaul -- "black background with our active traces/cursors
+   being the most vibrant and engaging visual element." Ring hues (given =
+   yellow, received = blue, made = green) are law-declared (00-laws.md /
+   lexicon) and untouched in identity -- only pushed to saturated/luminous
+   variants here so they read as bright, moving foreground against a dark
+   field, rather than the pastel washes that worked on white. */
+:root {
+  --bg: #0b0b0e;
+  --bg-panel: #17171d;
+  --bg-input: #1c1c24;
+  --border: #34343e;
+  --border-soft: #262630;
+  --text: #d9d9e0;
+  --text-dim: #8d8d98;
+  --text-faint: #5c5c68;
+  --accent-given: #ffcf3d;
+  --accent-received: #34b3ff;
+  --accent-made: #3ee87a;
+  --danger: #ff5b52;
+  --warn-bg: #2a1c0d;
+  --warn-border: #7a4a12;
+  --warn-text: #e3a25a;
+  --focus: #34b3ff;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  padding: 24px;
+}
+h1 { font-size: 20px; margin: 0 0 16px; color: var(--text); }
+.sub { font-weight: normal; font-size: 13px; color: var(--text-dim); }
+
+.layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.wheel-frame {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 24px;
+}
+
+.legend-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+  margin-top: 10px;
+}
+.legend-key {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 13px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-bottom: 3px solid var(--accent, var(--border));
+  border-radius: 3px;
+  background: var(--bg-panel);
+  cursor: pointer;
+  transition: background 120ms, box-shadow 120ms;
+}
+.legend-key:hover { background: #202028; }
+.legend-key.legend-flash {
+  background: #4a3f10;
+  box-shadow: 0 0 0 2px var(--accent-given), 0 0 10px 1px var(--accent-given);
+}
+
+.timbre-panel {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  background: var(--bg-panel);
+}
+.timbre-panel + .timbre-panel { margin-top: 8px; }
+.timbre-panel summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.timbre-presets {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-soft);
+}
+.timbre-presets select,
+.timbre-presets button { font-size: 11px; padding: 3px 8px; }
+.timbre-grid {
+  display: grid;
+  /* Was a fixed 2 columns regardless of the panel's own actual width --
+     squeezed a slider+number row into ~200px inside the old 420px cap.
+     auto-fit lets the SAME markup lay out as 2, 3, or 4+ columns
+     depending on how much width .panel actually has right now, so widening
+     the panel automatically shortens (and un-scrolls) the parameter list
+     instead of just adding blank margin. */
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px 14px;
+  margin-top: 10px;
+}
+.timbre-group-label {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+  margin-top: 6px;
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 2px;
+}
+.timbre-grid .timbre-group-label:first-child { margin-top: 0; }
+.timbre-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.timbre-grid .rw { display: flex; gap: 6px; align-items: center; }
+.timbre-grid input:disabled { opacity: 0.4; cursor: not-allowed; }
+.timbre-grid input[type="range"] { flex: 1; min-width: 0; }
+.timbre-grid input[type="number"] {
+  width: 62px;
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+canvas {
+  background: #08080b;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 320px;
+  /* Was a hard 420px cap regardless of screen size -- "a lot of empty
+     screen real estate... before having to scroll horizontally or
+     vertically." Grows to use whatever's actually available (up to a
+     sane reading-width ceiling so a single label+slider row doesn't
+     stretch absurdly wide on an ultrawide monitor) instead of staying
+     pinned narrow next to unused black space. */
+  flex: 1 1 480px;
+  max-width: 1600px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+input[type="text"] {
+  font-size: 15px;
+  padding: 6px 8px;
+  font-family: monospace;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+/* Live invalid-character preview: a real, editable input with its own
+   text made transparent (only its caret stays visible) sitting in front
+   of a backdrop div that renders the SAME text with unrecognized
+   characters colored red. Padding/font here must stay byte-identical to
+   input[type="text"] above, or the two layers drift out of alignment. */
+.input-highlight-wrap {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-input);
+}
+.input-backdrop {
+  position: absolute;
+  inset: 0;
+  padding: 6px 8px;
+  font-size: 15px;
+  font-family: monospace;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--text);
+}
+.input-backdrop .invalid-char {
+  color: var(--danger);
+  font-weight: 700;
+}
+.input-highlight-wrap input#input {
+  position: relative;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+}
+.input-highlight-wrap input#input:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+input[type="range"] { width: 100%; accent-color: var(--accent-received); }
+
+select,
+button {
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+select#phrase-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  padding: 5px 6px;
+  border-radius: 3px;
+}
+
+.ring-modes label.inline {
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.ring-modes select {
+  font-weight: normal;
+  padding: 3px 4px;
+  border-radius: 3px;
+}
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.response-procession { display: flex; flex-direction: column; gap: 6px; }
+.response-step-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.response-step-row .step-index { color: var(--text-faint); width: 1.4em; }
+.response-step-row select,
+.response-step-row input[type="number"] { font-size: 12px; padding: 2px 4px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 3px; }
+.response-step-row input[type="number"] { width: 48px; }
+.response-step-row label.inline { font-size: 12px; color: var(--text-dim); }
+.response-step-row .step-spacer { flex: 1; }
+.response-step-row button { padding: 2px 8px; font-size: 11px; }
+
+button {
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:hover { background: #24242c; }
+
+.status { font-size: 12px; color: var(--text-dim); }
+
+.unknown-warning {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.readout {
+  font-size: 13px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 10px;
+  color: var(--text-dim);
+}
+
+label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+}
+
+.loop-log {
+  max-height: 120px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* Pictographic keyboard -- an "unrolled" wheel: 12 spoke-columns, one row
+   per ring plus a 4th for still-open (unassigned) letters. Full-width, its
+   own section below the wheel+panel row, since a 12-column grid needs more
+   room than the narrow side panel has. */
+.keyboard-section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-soft);
+}
+.keyboard-section h2 {
+  font-size: 15px;
+  margin: 0 0 4px;
+  color: var(--text);
+}
+.keyboard-section .sub {
+  display: block;
+  margin-bottom: 10px;
+}
+.keyboard {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kbd-row {
+  display: grid;
+  grid-template-columns: 90px repeat(12, minmax(0, 1fr));
+  gap: 3px;
+  align-items: stretch;
+}
+.kbd-row-label {
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.kbd-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: stretch;
+  justify-content: center;
+  min-height: 30px;
+  padding: 3px;
+  border-radius: 4px;
+}
+.kbd-row-given .kbd-cell { background: rgba(255, 207, 61, 0.1); }
+.kbd-row-received .kbd-cell { background: rgba(52, 179, 255, 0.1); }
+.kbd-row-made .kbd-cell { background: rgba(62, 232, 122, 0.1); }
+.kbd-row-unassigned .kbd-cell { background: transparent; border: 1px dashed var(--border); }
+.kbd-key {
+  position: relative;
+  font-size: 12px;
+  padding: 3px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: background 120ms, box-shadow 120ms;
+}
+.kbd-shorthand {
+  position: absolute;
+  top: -5px;
+  right: -3px;
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: 2px;
+  padding: 0 2px;
+  line-height: 1.3;
+}
+.kbd-key:hover { background: #26262f; }
+.kbd-key.kbd-flash {
+  background: #4a3f10;
+  box-shadow: 0 0 0 2px var(--accent-given), 0 0 10px 1px var(--accent-given);
+}
+.kbd-space-row {
+  margin-top: 8px;
+}
