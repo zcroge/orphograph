@@ -63,6 +63,13 @@ export const DEFAULT_VIEW_PARAMS = {
   hullEchoLife: 1800,             // one brief pass, both directions -- not a standing/accumulating tunnel
   hullEchoStrength: 0.55,
   hullEchoReach: 0.5,
+  // "The master hull should stick to the true drawn trace's plane when it
+  // intersects it, and leave a fading copy in place, like a verification/
+  // checkpoint" -- stamped on the live trace's own plane every time the
+  // hull's own echo pass fires (see pulseHullEcho). Deliberately longer-
+  // lived than a propagating echo -- a lingering mark, not another ripple.
+  hullCheckpointLife: 3200,
+  hullCheckpointStrength: 0.6,
   echoHitLife: 1900,
   echoHitStrength: 0.55,
   echoBurstLife: 2200,
@@ -235,6 +242,18 @@ export class WheelView {
     // spawnTransformEcho/spawnTransposeEcho. A short-lived list; a
     // transposition step or a procession stage crossing is rare.
     this._transformEchoes = [];
+    // `_traceCheckpoints` -- "the master hull-diagram/blueprint should
+    // 'stick' to the true drawn trace's plane when it intersects it, and
+    // leave a fading copy in place, almost like a verification/
+    // checkpoint." The hull is otherwise invisible at rest, only ever
+    // passing back through visibility as its own brief echo pass
+    // (pulseHullEcho) -- that IS the real, recurring moment the blueprint
+    // actively intersects the live trace's own space, so a checkpoint is
+    // stamped there, at each ring's own CURRENT live point, every time.
+    // Longer-lived and visually distinct (a settling ring, not a
+    // travelling line) from the brief propagating echo that already fires
+    // alongside it -- a lingering confirmation, not a repeat of the ripple.
+    this._traceCheckpoints = [];
   }
 
   reset() {
@@ -245,6 +264,7 @@ export class WheelView {
     this._echoes = [];
     this._standingGenerations = [];
     this._transformEchoes = [];
+    this._traceCheckpoints = [];
     this._ringPhaseSpoke = { given: 1, received: 1, made: 1 };
   }
 
@@ -551,6 +571,19 @@ export class WheelView {
       { bornAt: now, life: vp.hullEchoLife, direction: "out", strengthMult, rimOffsetAtCapture },
       { bornAt: now, life: vp.hullEchoLife, direction: "in", strengthMult, rimOffsetAtCapture },
     ];
+    // "Stick to the true drawn trace's plane when it intersects it" -- this
+    // IS that intersection: the one real, recurring moment the otherwise-
+    // invisible hull actively passes back through the live trace's own
+    // space. Stamp each still-drawing ring's own current live point.
+    for (const ring of Object.keys(this.persistentTraceByRing)) {
+      const trail = this.persistentTraceByRing[ring];
+      if (!trail.length) continue;
+      this._traceCheckpoints.push({
+        ring, spoke: trail[trail.length - 1].spoke, bornAt: now,
+        life: vp.hullCheckpointLife, rotationAtCapture: rimOffsetAtCapture,
+      });
+    }
+    if (this._traceCheckpoints.length > 24) this._traceCheckpoints.splice(0, this._traceCheckpoints.length - 24);
   }
 
   // "A full-trace or transform should propagate out and erase the
@@ -955,27 +988,49 @@ export class WheelView {
     // SAME live dial the master hull uses (see main.js's own fix
     // comment on recordVisit) -- so the live trace and the hull can never
     // drift apart; they read the identical number every frame.
+    // "Build up the density of the true drawn trace layer by giving it 3
+    // simultaneous levels of render, with two fainter, slightly breathing/
+    // wavering color-accurate echoes and a central, brighter true center."
+    // Two free-running (NOT tempo-locked -- deliberately independent of
+    // each other and of the shared, lockstep `breathPulse` every other
+    // echo in this file uses, so this reads as its own organic shimmer,
+    // the same "vocalization wander" idiom synth.js's growl formants
+    // already use for exactly this reason) small radius wobbles, out of
+    // phase with each other so the two echo copies visibly diverge rather
+    // than moving as one. Still fully color-accurate (glowColor, not a
+    // desaturated/near-white ghost) -- these are echoes of the SAME line,
+    // just fainter and gently offset, not a different kind of mark.
+    const densityWobble1 = Math.sin(2 * Math.PI * 0.11 * (now / 1000)) * 0.014;
+    const densityWobble2 = Math.sin(2 * Math.PI * 0.17 * (now / 1000) + 2.3) * 0.017;
+    const TRACE_DENSITY_LEVELS = [
+      { radiusMult: 1, alphaMult: 1 },               // central, true center
+      { radiusMult: 1 + densityWobble1, alphaMult: 0.4 },
+      { radiusMult: 1 - densityWobble2, alphaMult: 0.4 },
+    ];
+
     for (const ringName of Object.keys(this.persistentTraceByRing)) {
       const trail = this.persistentTraceByRing[ringName];
       if (trail.length < 1) continue;
       const glowColor = RING_MARKER_COLOR[ringName];
-      const at = (v) => spokePoint(v.spoke - rimOffset, baseRadius, cx, cy);
+      const at = (v, radiusMult) => spokePoint(v.spoke - rimOffset, baseRadius * radiusMult, cx, cy);
       const recencyOf = (i) => trail.length > 1 ? i / (trail.length - 1) : 1; // 0 = oldest, 1 = newest
       // "The circular vertex-markers are more of a distraction than a
       // source of information" -- removed; the connecting lines alone
       // carry the shape, same reasoning that already dropped vertex
       // circles everywhere else the echo/extrusion system touches.
-      for (let i = 1; i < trail.length; i++) {
-        const a = at(trail[i - 1]);
-        const b = at(trail[i]);
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = glowColor;
-        ctx.lineWidth = 1.5;
-        ctx.globalAlpha = 0.12 + 0.35 * recencyOf(i);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
+      for (const level of TRACE_DENSITY_LEVELS) {
+        for (let i = 1; i < trail.length; i++) {
+          const a = at(trail[i - 1], level.radiusMult);
+          const b = at(trail[i], level.radiusMult);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.strokeStyle = glowColor;
+          ctx.lineWidth = 1.5;
+          ctx.globalAlpha = (0.12 + 0.35 * recencyOf(i)) * level.alphaMult;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
       }
     }
 
@@ -1211,6 +1266,31 @@ export class WheelView {
         if (i === 0) ctx.moveTo(pt.x, pt.y);
         else ctx.lineTo(pt.x, pt.y);
       });
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Hull checkpoints -- "the master hull sticks to the true drawn
+    // trace's plane when it intersects it, and leaves a fading copy in
+    // place, like a verification/checkpoint." Stamped by pulseHullEcho at
+    // each ring's own live point; drawn as a small ring that settles
+    // outward while fading (distinct from every other mark here, which
+    // either travels a straight/radial path or holds a fixed size) so a
+    // "stamped and verified" read is genuinely its own visual category,
+    // not a repeat of the brief propagating echo firing alongside it.
+    // Clipped to the frame with everything else that lives on the trace's
+    // own local plane, unlike the hull's own big unclipped sweep below.
+    this._traceCheckpoints = this._traceCheckpoints.filter((cp) => now - cp.bornAt < cp.life);
+    for (const cp of this._traceCheckpoints) {
+      const t = (now - cp.bornAt) / cp.life;
+      const alpha = this._viewParams.hullCheckpointStrength * Math.pow(1 - t, 1.5);
+      if (alpha <= 0.003) continue;
+      const p = spokePoint(cp.spoke - cp.rotationAtCapture, baseRadius, cx, cy);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3 + 5 * t, 0, Math.PI * 2);
+      ctx.strokeStyle = "#f4ead0";
+      ctx.lineWidth = 1.25;
+      ctx.globalAlpha = alpha;
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
