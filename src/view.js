@@ -62,12 +62,24 @@ export const DEFAULT_VIEW_PARAMS = {
   standingBaseAlpha: 0.42,
   hullEchoLife: 1800,             // one brief pass, both directions -- not a standing/accumulating tunnel
   hullEchoStrength: 0.55,
-  hullEchoReach: 0.5,
-  // "The master hull should stick to the true drawn trace's plane when it
-  // intersects it, and leave a fading copy in place, like a verification/
-  // checkpoint" -- stamped on the live trace's own plane every time the
-  // hull's own echo pass fires (see pulseHullEcho). Deliberately longer-
-  // lived than a propagating echo -- a lingering mark, not another ripple.
+  // The inward pass travels from outerR down to outerR*(1-hullEchoReach).
+  // The live trace's own plane sits at outerR*0.42 (_traceRadius) -- this
+  // needs to reach AT LEAST 0.58 for the inward pass to ever genuinely
+  // reach it at all (see render()'s own crossing-detection comment and
+  // hullCheckpointLife/Strength below); 0.65 gives real margin so it
+  // reliably crosses even with the small breathPulse wobble layered on
+  // top, rather than the "leave a frozen copy" event silently never
+  // firing. Lowering this far enough will suppress that event again --
+  // an honest, real consequence of how far the pass actually travels, not
+  // a hidden bug.
+  hullEchoReach: 0.65,
+  // "The white master hull echo should leave a full frozen copy of itself
+  // in place when it perfectly overlays the active trace plane, which
+  // should linger and fade." Fires the ONE real moment the inward pass
+  // above's own live radius actually crosses the trace's own baseRadius
+  // (detected in render(), see hullEchoReach's comment) -- a real
+  // geometric event, not a per-hit stamp. Deliberately longer-lived than
+  // a propagating echo -- a lingering mark, not another ripple.
   hullCheckpointLife: 3200,
   hullCheckpointStrength: 0.6,
   echoHitLife: 1900,
@@ -299,18 +311,19 @@ export class WheelView {
     // spawnTransformEcho/spawnTransposeEcho. A short-lived list; a
     // transposition step or a procession stage crossing is rare.
     this._transformEchoes = [];
-    // `_traceCheckpoints` -- "the master hull-diagram/blueprint should
-    // 'stick' to the true drawn trace's plane when it intersects it, and
-    // leave a fading copy in place, almost like a verification/
-    // checkpoint." The hull is otherwise invisible at rest, only ever
-    // passing back through visibility as its own brief echo pass
-    // (pulseHullEcho) -- that IS the real, recurring moment the blueprint
-    // actively intersects the live trace's own space, so a checkpoint is
-    // stamped there, at each ring's own CURRENT live point, every time.
-    // Longer-lived and visually distinct (a settling ring, not a
-    // travelling line) from the brief propagating echo that already fires
-    // alongside it -- a lingering confirmation, not a repeat of the ripple.
-    this._traceCheckpoints = [];
+    // `_hullFrozenCopies` -- "the white master hull echo should leave a
+    // FULL FROZEN COPY of itself in place when it perfectly overlays the
+    // active trace plane, which should linger and fade." The hull is
+    // otherwise invisible at rest, only ever passing back through
+    // visibility as its own brief traveling echo pass (pulseHullEcho) --
+    // its INWARD pass genuinely travels from outerR down toward the live
+    // trace's own baseRadius; the exact real moment its own radius
+    // crosses baseRadius (detected frame-to-frame in render(), a real
+    // geometric event, not a guessed timing) is when the WHOLE hull shape
+    // (every point, matching what a real overlay actually is, not a
+    // per-ring stamp) gets copied here, frozen, to linger and fade on its
+    // own -- distinct from the brief travelling pass that spawned it.
+    this._hullFrozenCopies = [];
   }
 
   reset() {
@@ -320,11 +333,11 @@ export class WheelView {
     this.masterHull = [];
     this.masterHullLetters = [];
     this._hullEchoAges = [];
+    this._hullFrozenCopies = [];
     this._eventPulse = { amount: 0, startedAt: 0, life: 1 };
     this._echoes = [];
     this._standingGenerations = [];
     this._transformEchoes = [];
-    this._traceCheckpoints = [];
     this._ringPhaseSpoke = { given: 1, received: 1, made: 1 };
   }
 
@@ -654,23 +667,18 @@ export class WheelView {
     // trace as it WAS at this real moment, not silently re-rotating with
     // whatever the live rim dial does during its own ~2s flight.
     const rimOffsetAtCapture = this._currentRimOffset;
+    // "The white master hull echo should leave a full frozen copy of
+    // itself in place when it perfectly overlays the active trace plane,
+    // which should linger and fade." Not spawned here -- the "in"
+    // direction pass above genuinely travels from outerR down toward the
+    // trace's own baseRadius over its life; the render loop tracks that
+    // pass's own live radius frame to frame and fires the frozen copy at
+    // the exact moment it actually crosses baseRadius (a real geometric
+    // event, not a guess at timing) -- see render()'s own hull-echo block.
     this._hullEchoAges = [
       { bornAt: now, life: vp.hullEchoLife, direction: "out", strengthMult, rimOffsetAtCapture },
-      { bornAt: now, life: vp.hullEchoLife, direction: "in", strengthMult, rimOffsetAtCapture },
+      { bornAt: now, life: vp.hullEchoLife, direction: "in", strengthMult, rimOffsetAtCapture, _crossedTracePlane: false, _lastR: null },
     ];
-    // "Stick to the true drawn trace's plane when it intersects it" -- this
-    // IS that intersection: the one real, recurring moment the otherwise-
-    // invisible hull actively passes back through the live trace's own
-    // space. Stamp each still-drawing ring's own current live point.
-    for (const ring of Object.keys(this.persistentTraceByRing)) {
-      const trail = this.persistentTraceByRing[ring];
-      if (!trail.length) continue;
-      this._traceCheckpoints.push({
-        ring, spoke: trail[trail.length - 1].spoke, bornAt: now,
-        life: vp.hullCheckpointLife, rotationAtCapture: rimOffsetAtCapture,
-      });
-    }
-    if (this._traceCheckpoints.length > 24) this._traceCheckpoints.splice(0, this._traceCheckpoints.length - 24);
   }
 
   // "A full-trace or transform should propagate out and erase the
@@ -1423,30 +1431,6 @@ export class WheelView {
       ctx.globalAlpha = 1;
     }
 
-    // Hull checkpoints -- "the master hull sticks to the true drawn
-    // trace's plane when it intersects it, and leaves a fading copy in
-    // place, like a verification/checkpoint." Stamped by pulseHullEcho at
-    // each ring's own live point; drawn as a small ring that settles
-    // outward while fading (distinct from every other mark here, which
-    // either travels a straight/radial path or holds a fixed size) so a
-    // "stamped and verified" read is genuinely its own visual category,
-    // not a repeat of the brief propagating echo firing alongside it.
-    // Clipped to the frame with everything else that lives on the trace's
-    // own local plane, unlike the hull's own big unclipped sweep below.
-    this._traceCheckpoints = this._traceCheckpoints.filter((cp) => now - cp.bornAt < cp.life);
-    for (const cp of this._traceCheckpoints) {
-      const t = (now - cp.bornAt) / cp.life;
-      const alpha = this._viewParams.hullCheckpointStrength * Math.pow(1 - t, 1.5);
-      if (alpha <= 0.003) continue;
-      const p = spokePoint(cp.spoke - cp.rotationAtCapture, baseRadius, cx, cy);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 3 + 5 * t, 0, Math.PI * 2);
-      ctx.strokeStyle = "#f4ead0";
-      ctx.lineWidth = 1.25;
-      ctx.globalAlpha = alpha;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
     ctx.restore();
 
     // The master hull's own brief echo pass -- "the traced/white-line
@@ -1467,11 +1451,31 @@ export class WheelView {
       for (const age of this._hullEchoAges) {
         const t = (now - age.bornAt) / age.life;
         const eased = 1 - Math.pow(1 - t, 2);
+        const scale = (1 + (age.direction === "in" ? -1 : 1) * eased * vpStanding.hullEchoReach) * breathPulse;
+        const r = outerR * scale;
+        // "The white master hull echo should leave a full frozen copy of
+        // itself in place when it PERFECTLY OVERLAYS the active trace
+        // plane, which should linger and fade." Tracked unconditionally
+        // (before the alpha/scale visibility guards below), frame to
+        // frame, so a real crossing is never missed just because it
+        // happens while the pass is dim. The inward pass's own radius is
+        // monotonically decreasing, so this fires at most once per pass,
+        // at the exact real moment r actually crosses baseRadius --
+        // never a guessed or fixed timing.
+        if (age.direction === "in") {
+          if (age._lastR != null && age._lastR > baseRadius && r <= baseRadius && !age._crossedTracePlane) {
+            age._crossedTracePlane = true;
+            this._hullFrozenCopies.push({
+              spokes: [...this.masterHull], letters: [...this.masterHullLetters],
+              bornAt: now, life: this._viewParams.hullCheckpointLife, rotationAtCapture: age.rimOffsetAtCapture,
+            });
+            if (this._hullFrozenCopies.length > 6) this._hullFrozenCopies.shift();
+          }
+          age._lastR = r;
+        }
         const alpha = vpStanding.hullEchoStrength * (age.strengthMult ?? 1) * Math.pow(1 - t, this._viewParams.echoFadeExponent);
         if (alpha <= 0.003) continue;
-        const scale = (1 + (age.direction === "in" ? -1 : 1) * eased * vpStanding.hullEchoReach) * breathPulse;
         if (scale <= 0.03) continue;
-        const r = outerR * scale;
         ctx.strokeStyle = "#f4ead0";
         ctx.lineWidth = 1.25;
         ctx.setLineDash([5, 4]);
@@ -1496,6 +1500,44 @@ export class WheelView {
         }
         ctx.globalAlpha = 1;
       }
+    }
+
+    // The frozen copy itself -- static (fixed at the trace's own
+    // baseRadius, only the shared ambient breathPulse wobble moves it at
+    // all -- never travels again once spawned), lingering and fading over
+    // its own life. Same dashed styling as the traveling pass it froze
+    // from ("a full frozen copy of ITSELF"), so it genuinely reads as
+    // that same pass, paused, rather than a new kind of mark.
+    this._hullFrozenCopies = this._hullFrozenCopies.filter((fc) => now - fc.bornAt < fc.life);
+    for (const fc of this._hullFrozenCopies) {
+      if (fc.spokes.length < 2) continue;
+      const t = (now - fc.bornAt) / fc.life;
+      const alpha = this._viewParams.hullCheckpointStrength * Math.pow(1 - t, this._viewParams.echoFadeExponent);
+      if (alpha <= 0.003) continue;
+      const r = baseRadius * breathPulse;
+      ctx.strokeStyle = "#f4ead0";
+      ctx.lineWidth = 1.25;
+      ctx.setLineDash([5, 4]);
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      fc.spokes.forEach((s, i) => {
+        const pt = spokePoint(s - fc.rotationAtCapture, r, cx, cy);
+        if (i === 0) ctx.moveTo(pt.x, pt.y);
+        else ctx.lineTo(pt.x, pt.y);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (fc.letters.length === fc.spokes.length) {
+        ctx.font = "9px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        fc.spokes.forEach((s, i) => {
+          const pt = spokePoint(s - fc.rotationAtCapture, r, cx, cy);
+          ctx.fillStyle = "#f4ead0";
+          drawRadialText(ctx, fc.letters[i], pt.x, pt.y, s - fc.rotationAtCapture);
+        });
+      }
+      ctx.globalAlpha = 1;
     }
 
     // Propagating echoes, BURST kind -- "periodic event-based echoes
