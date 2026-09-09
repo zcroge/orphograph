@@ -846,6 +846,18 @@ export class OrphographAudio {
     // first setDroneVoices/setChamberRoot call establishes it.
     this._chamberRootHz = 0;
 
+    // The flute's own MELODIC root -- deliberately separate from
+    // `_chamberRootHz` above (that's the physical resonance body, "a
+    // different flute for this key"; this is which Hz scale-degree-0
+    // actually sounds at) and from `_droneBaseHz` (the drone's own
+    // fixed-on-O anchor, settled law, never moves). Set by
+    // `setMelodicRoot` when the phrase's derived scale is active (see
+    // main.js's deriveScaleFromTrace fix -- the tritone bug this closes),
+    // 0 (meaning "none set yet, fall back to the drone's O anchor") the
+    // rest of the time, e.g. while a named mode preset is in effect
+    // ("relative to the drone's root" is a coherent, unaffected case).
+    this._melodicRootBaseHz = 0;
+
     // "The cyclic transposition graphics work, but the trace and music
     // don't actually follow suit" -- root cause: main.js's transposition
     // only ever rotated the KALIMBA/note-timbre real-hit voice's spoke
@@ -1016,7 +1028,17 @@ export class OrphographAudio {
   // to ~1.5 semitones (~9%) off that when it snaps to the nearest scale
   // degree, which is small enough to just clamp flat rather than re-fold a
   // whole octave over a few Hz of quantization wobble.
-  _fluteLayerHz(targetHz, octaveMult, rootHz = this._effectiveDroneBaseHz()) {
+  //
+  // The default `rootHz` is the QUANTIZATION root (which absolute Hz
+  // scale-degree-0 snaps to), deliberately independent of the register/
+  // harmonic math above (`_fluteFundamentalHz`, still always anchored on
+  // the drone's O -- register stays law) -- prefers the phrase's own
+  // derived melodic root when one is set, falls back to O otherwise. The
+  // two explicit-rootHz call sites (construction, mid-restart retune) keep
+  // passing the raw incoming `baseHz` unchanged -- they run before
+  // `_droneBaseHz`/`_transpositionRatio` are settled, the same reason they
+  // already bypassed `_effectiveDroneBaseHz()`.
+  _fluteLayerHz(targetHz, octaveMult, rootHz = this._effectiveMelodicRootHz() || this._effectiveDroneBaseHz()) {
     const dp = this.droneParams;
     const quantized = quantizeFluteHz(targetHz * octaveMult, rootHz, dp.whistleScale);
     return Math.min(dp.whistleCeilingHz, Math.max(dp.whistleFloorHz, quantized));
@@ -1657,6 +1679,30 @@ export class OrphographAudio {
   // separates the two uses instead of leaving them conflated.
   _effectiveDroneBaseHz() {
     return (this._droneBaseHz || 0) * this._transpositionRatio;
+  }
+
+  // "Deriving the flute's melodic root from the phrase's own root spoke,
+  // instead of always quantizing relative to the drone's fixed O anchor."
+  // Real bug this fixes (MUSIC-STRUCTURE-PLAN.md F1): the derived scale
+  // used to be expressed relative to spoke 1 (I) but every quantize call
+  // applied it relative to O (spoke 7) -- a tritone off, always, whenever
+  // "scale follows input" was on. main.js now derives the scale AND calls
+  // `setMelodicRoot` together, both relative to the SAME root
+  // (`rootSpoke`), so they can't mismatch again. Untransposed base is set
+  // once per Play; scaled live by the SAME `_transpositionRatio` the
+  // drone's O-anchor already uses, so a mid-phrase transposition step
+  // moves the melodic root exactly as it moves everything else pitched.
+  setMelodicRoot(hz) {
+    this._melodicRootBaseHz = hz > 0 ? hz : 0;
+  }
+
+  // Falls back to 0 (not the drone's O-anchor) when no melodic root has
+  // been set -- callers OR this against `_effectiveDroneBaseHz()`
+  // themselves, so "no melodic root yet" (before the first Play, or while
+  // a named mode preset -- explicitly root-on-O by design -- is active)
+  // reads as "use O" without this method silently picking a wrong default.
+  _effectiveMelodicRootHz() {
+    return (this._melodicRootBaseHz || 0) * this._transpositionRatio;
   }
 
   // Re-applies the chamber-bank's own mode frequencies/gains/Q from the

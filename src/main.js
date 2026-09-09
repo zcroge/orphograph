@@ -971,9 +971,16 @@ $("play").addEventListener("click", () => {
     // about to play (call + any response) sets the flute's shared scale,
     // when the toggle is on. See deriveScaleFromTrace's own comment.
     if ($("scale-follows-input").checked) {
-      const derived = deriveScaleFromTrace(trace);
+      const derived = deriveScaleFromTrace(trace, rootSpoke);
       if (derived.length > 0) {
         audio.setDroneParam("whistleScale", derived);
+        // The scale is now expressed relative to rootSpoke (F1 fix) --
+        // the quantization root has to point at the exact same spoke, or
+        // the tritone bug just returns in a new form. Named mode presets
+        // (below, via the mode-preset select) stay relative to the
+        // drone's O anchor by design -- setMelodicRoot is only ever
+        // called from this derived-scale path.
+        audio.setMelodicRoot(hzForSpoke(rootSpoke) * Math.pow(2, DRONE_OCTAVE_SHIFT));
         // "The scale in the text field doesn't seem to update" -- it
         // really wasn't: this call only ever reached the audio param
         // directly, so the field had no way to show what was actually
@@ -984,6 +991,10 @@ $("play").addEventListener("click", () => {
         whistleScaleInput.value = derived.join(", ");
         $("whistle-mode-preset").value = "";
       }
+    } else {
+      // Falls back to the drone's O anchor (see _effectiveMelodicRootHz's
+      // own comment) -- a manual scale/mode preset is root-on-O by design.
+      audio.setMelodicRoot(0);
     }
 
     // "Different drone flutes in different keys" -- rootSpoke is the
@@ -1233,14 +1244,54 @@ $("whistle-mode-preset").addEventListener("change", (e) => {
 // contributes its own letters too) each time Play runs, when the toggle
 // is on; leaves whatever's in the scale field alone when it's off, or if
 // the phrase happens to touch no real letters at all.
-function deriveScaleFromTrace(trace) {
+//
+// Three real bugs fixed here (MUSIC-STRUCTURE-PLAN.md F1/F2/F3), found by
+// reading, not running:
+//   F1 -- reference frame. Used to express the scale relative to spoke 1
+//     (I) while every consumer (quantizeFluteHz) applied it relative to
+//     the drone's O anchor (spoke 7) -- a tritone off, always. Now
+//     expressed relative to `rootSpoke` (the phrase's own declared root,
+//     trace.js), and the caller below now also points the actual
+//     quantization root (audio.setMelodicRoot) at that SAME spoke, so the
+//     two can't drift apart again.
+//   F2 -- used the letter's CANONICAL spoke (PLACEHOLDER_SPOKE_OF), not
+//     the trace entry's own (possibly transformed) spoke -- a mirror/
+//     rotate response stage only ever contributed via the six literal
+//     twin-letter pairs. Reading entry.spoke directly means every real
+//     transform stage's own geometry counts.
+//   F3 -- REST sits at spoke 1 in PLACEHOLDER_SPOKE_OF, so every
+//     multi-word phrase silently added pitch class 0. Skipped now via
+//     entry.isRest.
+function deriveScaleFromTrace(trace, rootSpoke) {
   const semitones = new Set();
   for (const entry of trace) {
-    const spoke = PLACEHOLDER_SPOKE_OF[entry.letter];
-    if (spoke === undefined) continue;
-    semitones.add(((spoke - 1) % 12 + 12) % 12);
+    if (entry.isRest) continue;
+    if (entry.spoke === undefined) continue;
+    semitones.add(((entry.spoke - rootSpoke) % 12 + 12) % 12);
   }
   return Array.from(semitones).sort((a, b) => a - b);
+}
+
+// Shared foundation for chord/arpeggio content (MUSIC-STRUCTURE-PLAN.md
+// P2) -- the unique real spokes a word actually touches, order of first
+// occurrence preserved (not sorted -- a future voicing/arpeggio consumer
+// may care which letter came first). This is deliberately the SAME kind
+// of data onChordHit's own `velocityBySpoke` computes ad hoc, minus the
+// per-tier velocity weighting that's specific to that call site -- a
+// plain pitch-class-per-word view other consumers (the voicing engine,
+// an arpeggiator) can share instead of re-deriving it themselves, the
+// same "one place this gets decided" discipline deriveScaleFromTrace
+// above already established for the whole-phrase scale.
+function wordPitchClasses(word) {
+  const seen = new Set();
+  const spokes = [];
+  for (const entry of word) {
+    if (entry.isRest || entry.spoke === undefined) continue;
+    if (seen.has(entry.spoke)) continue;
+    seen.add(entry.spoke);
+    spokes.push(entry.spoke);
+  }
+  return spokes;
 }
 
 // Named vocal-register presets instead of raw harmonic-index numbers --
