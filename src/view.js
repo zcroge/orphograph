@@ -55,13 +55,13 @@ import { SPOKE_COUNT, RINGS, spokePoint, spokeAngle, isPole, rotateSpoke } from 
 // already driving note/drone timbre) can retune them without a code
 // change. See WheelView's own setViewParam.
 export const DEFAULT_VIEW_PARAMS = {
-  standingMaxGenerations: 8,     // "a greater accumulation of standing echoes visible at a given time"
-  standingAdvanceMs: 900,        // ms to settle into a new rank when pushed by a fresh capture (not a continuous crawl rate -- see captureStandingGeneration)
-  standingStep: 0.24,            // radial reach per rank
-  standingFadeRate: 0.16,        // exponential decay rate -- lower = longer, more gradual tail
-  standingBaseAlpha: 0.42,
-  hullEchoLife: 1800,             // one brief pass, both directions -- not a standing/accumulating tunnel
-  hullEchoStrength: 0.55,
+  standingMaxGenerations: 20,     // "a greater accumulation of standing echoes visible at a given time"
+  standingAdvanceMs: 2800,        // ms to settle into a new rank when pushed by a fresh capture (not a continuous crawl rate -- see captureStandingGeneration)
+  standingStep: 0.19,            // radial reach per rank
+  standingFadeRate: 0.53,        // exponential decay rate -- lower = longer, more gradual tail
+  standingBaseAlpha: 0.45,
+  hullEchoLife: 4200,             // one brief pass, both directions -- not a standing/accumulating tunnel
+  hullEchoStrength: 0.24,
   // The inward pass travels from outerR down to outerR*(1-hullEchoReach).
   // The live trace's own plane sits at outerR*0.42 (_traceRadius) -- this
   // needs to reach AT LEAST 0.58 for the inward pass to ever genuinely
@@ -72,7 +72,7 @@ export const DEFAULT_VIEW_PARAMS = {
   // firing. Lowering this far enough will suppress that event again --
   // an honest, real consequence of how far the pass actually travels, not
   // a hidden bug.
-  hullEchoReach: 0.65,
+  hullEchoReach: 1.5,
   // "The white master hull echo should leave a full frozen copy of itself
   // in place when it perfectly overlays the active trace plane, which
   // should linger and fade." Fires the ONE real moment the inward pass
@@ -80,28 +80,28 @@ export const DEFAULT_VIEW_PARAMS = {
   // (detected in render(), see hullEchoReach's comment) -- a real
   // geometric event, not a per-hit stamp. Deliberately longer-lived than
   // a propagating echo -- a lingering mark, not another ripple.
-  hullCheckpointLife: 3200,
-  hullCheckpointStrength: 0.6,
-  echoHitLife: 1900,
-  echoHitStrength: 0.55,
-  echoBurstLife: 2200,
-  echoBurstStrength: 0.7,
-  echoReachOut: 1.35,
-  echoReachIn: 0.92,
-  echoFadeExponent: 1.7,         // >1 = "fade to black more gradually," not an abrupt cutoff
-  breathPulseAmount: 0.035,      // "pulsate in scale slightly along with the low drones"
+  hullCheckpointLife: 1000,
+  hullCheckpointStrength: 0.43,
+  echoHitLife: 1950,
+  echoHitStrength: 0.69,
+  echoBurstLife: 2650,
+  echoBurstStrength: 1,
+  echoReachOut: 1.2,
+  echoReachIn: 0.28,
+  echoFadeExponent: 5,         // >1 = "fade to black more gradually," not an abrupt cutoff
+  breathPulseAmount: 0.14,      // "pulsate in scale slightly along with the low drones"
   // Per-ring phase bar -- "a continuous, interval-based timekeeping visual
   // indicator... a white bar that continuously travels around every ring
   // according to its phase." One per ring, real-time, not event-stepped.
-  phaseBarArcWidth: 0.4,         // how wide the bar/its echoes are, in spokes
-  phaseBarEchoLife: 900,         // brief -- "won't be too distracting"
-  phaseBarEchoStrength: 0.3,
+  phaseBarArcWidth: 0.35,         // how wide the bar/its echoes are, in spokes
+  phaseBarEchoLife: 2050,         // brief -- "won't be too distracting"
+  phaseBarEchoStrength: 0.22,
   // "The temporary trace paths... should fade away in a linear fashion as
   // they're drawn" -- see recordVisit/_provisionalSegments. Short on
   // purpose: a merely-passed connection is meant to read as fleeting, not
   // linger anywhere near as long as a real owned segment does.
-  provisionalSegmentLife: 700,
-  provisionalSegmentStrength: 0.5,
+  provisionalSegmentLife: 950,
+  provisionalSegmentStrength: 1.2,
   // "A slight z-space offset between the three [rings], 3d-anaglyph-esque,
   // to allow for ease of differentiation" -- all three rings' persistent
   // trace + standing-tunnel content used to share the EXACT same radius,
@@ -110,14 +110,14 @@ export const DEFAULT_VIEW_PARAMS = {
   // of the shared base radius (see _ringDepthOffset) -- given pulled
   // slightly in, made pushed slightly out, received centered -- lets
   // overlapping content separate into legible parallel traces instead.
-  ringDepthOffset: 0.012,
+  ringDepthOffset: 0.016,
   // "A lot of partial or hit-based echoes only create a fully
   // dissipating, non-stacking, non-incremented echo... we should still
   // push an echo increment into the pattern/stack on these events, but
   // those elements should be more subtle." How much weight a routine
   // per-hit standing-generation push carries, relative to a real
   // synchronizing event's full weight (1) -- see captureStandingGeneration.
-  standingHitIncrementStrength: 0.4,
+  standingHitIncrementStrength: 0.36,
 };
 
 // Shortest-arc interpolation between two (possibly fractional) spoke

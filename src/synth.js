@@ -194,14 +194,14 @@ const THROAT_HARMONICS = [
 // Defaults exported so a "factory default" preset can always be reconstructed
 // (see timbrePresets.js) without duplicating these numbers a second time.
 export const DEFAULT_NOTE_PARAMS = {
-  attackMs: 8,
-  lowpassHz: 2200,
-  lowpassQ: 0.7,
-  bodyHz: 450,
-  bodyQ: 3,
-  bodyAmountDb: 8,
-  pluckAmount: 0.18,
-  pluckMs: 18,
+  attackMs: 26,
+  lowpassHz: 4910,
+  lowpassQ: 2.75,
+  bodyHz: 210,
+  bodyQ: 6.1,
+  bodyAmountDb: 16,
+  pluckAmount: 0.82,
+  pluckMs: 80,
   // The kalimba's own authored register -- see foldIntoRange, applied in
   // playNote. Defaults to this voice's real current span (110-830.6Hz
   // across the three rings) so factory default is a no-op; exposed so the
@@ -219,7 +219,7 @@ export const DEFAULT_NOTE_PARAMS = {
 // two "should be MOVING" dimensions), formant (the talk-box vowel shaping,
 // "should be AURAL"), and filter/bass (the slow sweep + low-end weight).
 export const DEFAULT_DRONE_PARAMS = {
-  busGain: 0.3,
+  busGain: 0.2,
   // Breathing/vibrato/sweep rates are DERIVED, not free-floating Hz --
   // "adjust any Hz-based rates to become derived rates based on their
   // respective driven/associated ring and the given procession rate."
@@ -228,14 +228,14 @@ export const DEFAULT_DRONE_PARAMS = {
   // absolute frequency nothing else in the engine agrees with -- freeze
   // the procession and these freeze with it, exactly as a tempo-locked
   // instrument should. See OrphographAudio.setProcessionPulseRate.
-  breathPulsesPerCycle: 6,   // this ring's own voice breathes once every N of ITS pulses
-  breathDepth: 0.18,
-  vibratoCyclesPerPulse: 2,  // vibrato wobbles N times per THIS ring's own pulse
-  vibratoCents: 20,
-  breathNoiseGain: 0.05,
-  formantF1Q: 9,
-  formantF2Q: 11,
-  formantBlendGain: 1.25,
+  breathPulsesPerCycle: 24,   // this ring's own voice breathes once every N of ITS pulses
+  breathDepth: 0.15,
+  vibratoCyclesPerPulse: 0.5,  // vibrato wobbles N times per THIS ring's own pulse
+  vibratoCents: 34,
+  breathNoiseGain: 0.07,
+  formantF1Q: 18,
+  formantF2Q: 7.5,
+  formantBlendGain: 2.2,
   // "The bass drone's own spectral richness is being filtered out
   // downstream: moveFilter sits AFTER the formant pair and attenuates the
   // 570/950Hz formant peaks by ~14-22dB (up to ~36dB at the sweep's
@@ -246,11 +246,11 @@ export const DEFAULT_DRONE_PARAMS = {
   // saturation/subharmonic below something real to shape. Raised so the
   // filter's OWN "moving" character survives (still a real sweep, still
   // audible motion) without gating away the content underneath it.
-  moveFilterHz: 900,
-  moveFilterPulsesPerCycle: 48, // shared/bus-wide sweep: one full cycle every N MASTER pulses
-  moveFilterDepthHz: 100,
-  bassBoostHz: 140,
-  bassBoostDb: 9,
+  moveFilterHz: 200,
+  moveFilterPulsesPerCycle: 192, // shared/bus-wide sweep: one full cycle every N MASTER pulses
+  moveFilterDepthHz: 150,
+  bassBoostHz: 205,
+  bassBoostDb: 12,
   // "The low frequency drones should be given more didgeridoo-like
   // qualities -- the rough and shaped overtones." Real gap, not a tuning
   // problem: neither the drone nor the flute's growl had ANY mechanism
@@ -337,8 +337,8 @@ export const DEFAULT_DRONE_PARAMS = {
   // it. whistleHarmonic (manual/fallback pitch) kept at 8, already inside
   // the new range.
   whistleHarmonic: 8,
-  whistleHarmonicMin: 6,
-  whistleHarmonicMax: 9,
+  whistleHarmonicMin: 1,
+  whistleHarmonicMax: 10,
   // "I don't want the spacey, high pitched flute sound. The kalimba covers
   // the high pitched melodic notes, I want the flute drones to stay below a
   // more contained ceiling to keep it from becoming shrill/whistly." The
@@ -356,8 +356,8 @@ export const DEFAULT_DRONE_PARAMS = {
   // (C5) is the
   // "comfortable male singing range" ceiling from the same design goal --
   // and it sits below the kalimba's own melodic register instead of above it.
-  whistleFloorHz: 65,
-  whistleCeilingHz: 523,
+  whistleFloorHz: 30,
+  whistleCeilingHz: 436,
   // "RING_OCTAVE_MULTIPLIER no longer differentiates the flute's register
   // across rings" -- see _fluteTargetHz's own comment for the measured
   // "why" (the fold's own valid-shift window has ~0.008 octaves of real
@@ -367,14 +367,14 @@ export const DEFAULT_DRONE_PARAMS = {
   // HIGHER, before the shared fold/clamp ever runs -- so it can never
   // push a layer outside whistleFloorHz/CeilingHz either.
   whistleRingRegisterBias: 0.3,
-  whistleGlideMs: 20,
+  whistleGlideMs: 5,
   // A small, fixed spread BETWEEN this ring's own cluster voices (real
   // independent pipes don't land on the exact same cent) -- see
   // buildFluteToneLayer's per-voice detune. Used to be within one voice's
   // own oscillator pair, back when the tone core was oscillators; a real
   // sample doesn't need synthetic shimmer to sound alive the way a pure
   // sine did, so this moved one level up instead of disappearing.
-  whistleDetuneCents: 5,
+  whistleDetuneCents: 13.5,
 
   // Tone core: see buildFluteToneLayer -- a real recorded flute note
   // (assets/samples/flute-note-c4.mp3), pitch-shifted via playbackRate,
@@ -383,7 +383,7 @@ export const DEFAULT_DRONE_PARAMS = {
   // has the full "why" a real sample replaced it entirely). whistleAmount
   // is the MASTER flute level -- every voice in whistleVoicing below
   // scales relative to it.
-  whistleAmount: 0.18,
+  whistleAmount: 0.4,
 
   // "We have harmonizing parameters, but not a GROUP of instruments whose
   // harmonic relationships are parametrically authored -- that's the
@@ -452,9 +452,9 @@ export const DEFAULT_DRONE_PARAMS = {
   //      hit (whistleChiffAmount), decaying back over the SAME note-gate
   //      window (see whistleArticulationPulseFraction below) as the
   //      loudness bump.
-  whistleVibratoRateHz: 5,
-  whistleVibratoCents: 12,     // pitch depth
-  whistleVibratoAmpDepth: 0.06, // amplitude depth, as a fraction of tone level -- real breath vibrato couples both
+  whistleVibratoRateHz: 3.8,
+  whistleVibratoCents: 13,     // pitch depth
+  whistleVibratoAmpDepth: 0.09, // amplitude depth, as a fraction of tone level -- real breath vibrato couples both
   // "Still just a keyboard pad that sounds more or less spacey with the
   // wavering vibratos -- not a flute at all." Root cause, historically: ALL
   // THREE rings shared the exact same vibrato oscillator -- one signal,
@@ -471,7 +471,7 @@ export const DEFAULT_DRONE_PARAMS = {
   // see above), leveled independently per ring. Default kept low on
   // purpose -- this is texture riding on top of the tone, not competing
   // with it for presence.
-  whistleBreathAmount: 0.05,
+  whistleBreathAmount: 0.21,
   // "The breath dimension is just noise/static that I try to minimize --
   // it doesn't sound good." Root cause, checked directly: this used to be
   // ONE fixed absolute Hz (2200), identical for all three rings regardless
@@ -490,14 +490,14 @@ export const DEFAULT_DRONE_PARAMS = {
   // set once. NOT swept by anything periodic beyond that (still no
   // "Welcome to the Machine" resonant-filter LFO-sweep) -- only ever moved
   // by pitch itself and the one-shot chiff envelope below.
-  whistleBreathColorRatio: 5,
+  whistleBreathColorRatio: 9.6,
   // "Breath renews here" -- a real hit still means something distinct
   // from the steady sustain: a brief breath bump (more air, momentarily)
   // AND a brief brightening (more turbulence, momentarily) together,
   // both decaying back to steady over the same derived note-gate window
   // (see whistleArticulationPulseFraction below) as the tone's own gate.
-  whistleBreathSurgeAmount: 0.4,
-  whistleChiffAmount: 0.6, // how far the breath color opens up on a real hit, as a multiple of its own pitch-tracked base
+  whistleBreathSurgeAmount: 0.94,
+  whistleChiffAmount: 1.1, // how far the breath color opens up on a real hit, as a multiple of its own pitch-tracked base
   // "The note transitions still sound like a synth, not a flute changing
   // notes... there needs to be some kind of note envelope/gate per voice
   // that allows seamless droning while a single tone is allowed to
@@ -514,7 +514,7 @@ export const DEFAULT_DRONE_PARAMS = {
   // articulating." whistleNoteGateDipAmount is how far the tone (and
   // breath, together) duck before the new pitch and the attack -- 0 is
   // the old smooth-retune behavior, higher is a more clearly tongued gap.
-  whistleNoteGateDipAmount: 0.55,
+  whistleNoteGateDipAmount: 0.84,
   // "As many of our parameters as possible should derive/infer timing
   // from the wheel/input/transform state itself, rather than apply
   // arbitrary values." whistleBreathSurgeMs (a fixed 180ms) was exactly
@@ -528,7 +528,7 @@ export const DEFAULT_DRONE_PARAMS = {
   // tongued transitions and a slow one gets more relaxed, breathy ones --
   // note-change speed scales with tempo the way a real player's does,
   // instead of being fixed regardless of how fast the piece is moving.
-  whistleArticulationPulseFraction: 0.35,
+  whistleArticulationPulseFraction: 0.34,
 
   // "It just sounds like an organ patch on a keyboard." Root-caused, not
   // another guess: a stack of sine harmonics at fixed ratios, doubled
@@ -592,7 +592,7 @@ export const DEFAULT_DRONE_PARAMS = {
   // whistleBrightnessTempoSensitivity as the ring's own live pulse rate
   // moves away from that reference -- reusing setProcessionPulseRate,
   // the same tick that already retargets breath/vibrato rate live.
-  whistleBrightnessTempoSensitivity: 1,
+  whistleBrightnessTempoSensitivity: 2.8,
   whistleBrightnessReferencePps: 2,
   // Baseline tone-color lowpass cutoff, as a multiple of whatever pitch
   // THIS layer is currently playing (same pitch-tracking idea as
@@ -600,7 +600,7 @@ export const DEFAULT_DRONE_PARAMS = {
   // sample's own natural character through unfiltered at neutral
   // brightness (1x), since the point is dynamic movement on top of a real
   // recording, not muffling it.
-  whistleToneColorRatio: 8,
+  whistleToneColorRatio: 3.5,
 
   // The ONE voice's own FIXED chamber (see buildFluteChamberBank/setChamberRoot)
   // -- the physically-correct counterpart to whistleToneColorRatio above:
@@ -613,9 +613,9 @@ export const DEFAULT_DRONE_PARAMS = {
   // chooses which harmonic series a real pipe of that construction speaks --
   // "open" (transverse flute, every harmonic) or "stopped" (a capped/drone
   // pipe, odd harmonics only, the hollower character).
-  whistleChamberAmountDb: 6,
-  whistleChamberQ: 4,
-  whistleChamberModes: 4,
+  whistleChamberAmountDb: 5,
+  whistleChamberQ: 1.4,
+  whistleChamberModes: 3,
   whistleChamberPipe: "open",
 
   // "The flute is missing a drone in ITSELF -- didgeridoo-like at the low
@@ -628,12 +628,12 @@ export const DEFAULT_DRONE_PARAMS = {
   // throatier and deliberately broad-Q (a didgeridoo growl is rough, not
   // pure -- the chamber-Q tuning pass just found that sharp/high-Q stacking
   // is exactly what reads as "clean/organ," so this must not repeat that).
-  whistleGrowlAmount: 0.35, // authored ceiling, scaled by (1 - t)
-  whistleGrowlF1Hz: 130,
-  whistleGrowlF2Hz: 420,
-  whistleGrowlQ: 3.5, // shared by both bands -- one "how rough" knob, not two
-  whistleGrowlWanderHz: 0.2, // free-running "vocalization" wander, NOT pulse-locked
-  whistleGrowlWanderDepth: 40, // Hz
+  whistleGrowlAmount: 0.57, // authored ceiling, scaled by (1 - t)
+  whistleGrowlF1Hz: 90,
+  whistleGrowlF2Hz: 580,
+  whistleGrowlQ: 5.1, // shared by both bands -- one "how rough" knob, not two
+  whistleGrowlWanderHz: 0.35, // free-running "vocalization" wander, NOT pulse-locked
+  whistleGrowlWanderDepth: 155, // Hz
   // Same real fix as the bass drone's own droneSaturationAmount -- growl
   // used to be ONLY a bandpass EQ bump (a real filter can't generate new
   // harmonic content), so at even its authored maximum it read as a
@@ -646,8 +646,8 @@ export const DEFAULT_DRONE_PARAMS = {
   // gain on a multi-second, pulse-derived cycle, independent of any note
   // event -- the "continuous life" the flute never had of its own, scaled
   // by t so it's the high-register counterpart to growl above.
-  whistleDroneWaveCyclesPerRingPulse: 10,
-  whistleDroneWaveDepth: 0.12, // scaled by t
+  whistleDroneWaveCyclesPerRingPulse: 2,
+  whistleDroneWaveDepth: 0.26, // scaled by t
 
   // "I'd like our instrument to be able to reach from the lowest ranges of
   // guttural human throat singing... to a comfortable male singing range."
@@ -662,15 +662,15 @@ export const DEFAULT_DRONE_PARAMS = {
   // HALF the vocal folds' rate, not an invented "sub bass" effect. Both are
   // authored ceilings, scaled by lowT (0 at the sample floor, 1 at the
   // researched kargyraa floor).
-  whistleThroatAmount: 0.4,
-  whistleThroatSubharmonicAmount: 0.5,
+  whistleThroatAmount: 0.94,
+  whistleThroatSubharmonicAmount: 0.45,
 
   // "A big box" -- one shared resonant peak the three pipes speak INTO
   // together (not one each), same bodyHz/bodyQ/bodyAmountDb idea the note
   // voice already uses for its own wood-body resonance.
-  whistleBoxHz: 90,
-  whistleBoxQ: 2.5,
-  whistleBoxAmountDb: 6,
+  whistleBoxHz: 189,
+  whistleBoxQ: 1.9,
+  whistleBoxAmountDb: 3,
 };
 
 // See whistleVoicing above -- a FIXED number of voice slots are always
