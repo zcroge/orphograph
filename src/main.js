@@ -13,6 +13,62 @@ import { CompactLegend } from "./compactLegend.js";
 
 const $ = (id) => document.getElementById(id);
 
+// "The most limited UI available... including play, stop, and just the
+// basic text input/custom key selection grid in a compact format. I'd
+// like to keep the levers to a minimum when I let other people test it."
+// Every parameter row/panel/readout in index.html carries an
+// `advanced-only` class (see style.css's `body:not(.advanced-mode)
+// .advanced-only { display: none }`); this is the toggle for that class,
+// plus a real tooltip suppression to match ("tooltips... invisible by
+// default") -- most `title=` attributes live on elements already hidden
+// by the class alone, but a few (the compact key grid, the input's own
+// red-highlight explainer) sit on controls that stay visible, so this
+// strips EVERY title site-wide in minimal mode rather than hunting down
+// exceptions one at a time. A hidden hotkey (Ctrl+Alt+A, deliberately
+// undocumented in the UI itself) reveals everything -- persisted in this
+// browser only (localStorage), so a fresh visitor -- a different browser,
+// a different machine, the person you actually hand this link to --
+// always starts minimal regardless of what state you last left it in.
+const ADVANCED_MODE_KEY = "orphograph.advancedMode.v1";
+function setAdvancedMode(on) {
+  document.body.classList.toggle("advanced-mode", on);
+  if (on) {
+    document.querySelectorAll("[data-title-hidden]").forEach((el) => {
+      el.setAttribute("title", el.getAttribute("data-title-hidden"));
+      el.removeAttribute("data-title-hidden");
+    });
+  } else {
+    document.querySelectorAll("[title]").forEach((el) => {
+      el.setAttribute("data-title-hidden", el.getAttribute("title"));
+      el.removeAttribute("title");
+    });
+  }
+  try {
+    localStorage.setItem(ADVANCED_MODE_KEY, on ? "1" : "0");
+  } catch {
+    // Private browsing / storage disabled -- the toggle still works for
+    // this page load, it just won't be remembered next visit.
+  }
+}
+let storedAdvancedMode = false;
+try {
+  storedAdvancedMode = localStorage.getItem(ADVANCED_MODE_KEY) === "1";
+} catch {
+  // Same as above -- default to minimal if storage can't be read at all.
+}
+// NOT applied here yet -- CompactLegend/PictographKeyboard and the
+// default response-step row (all below) set their own `title` attributes
+// while populating, which hasn't happened yet at this point in the
+// script. Applying now would miss those entirely (querySelectorAll
+// finds nothing inside an empty grid). Applied once, at the very end of
+// this file's synchronous setup, after every constructor/render call
+// that could still add a title has already run.
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.altKey && e.key.toLowerCase() === "a") {
+    setAdvancedMode(!document.body.classList.contains("advanced-mode"));
+  }
+});
+
 // Live invalid-character preview -- "flag J, U, Q, X, C in red within the
 // input field... this will help me learn the phonetic basis behind each
 // letter as I move forward." A real editable <input> with its own text
@@ -912,6 +968,12 @@ function render() {
   });
 }
 render();
+
+// The real first application of minimal mode -- see setAdvancedMode's own
+// comment, above, for why this has to wait until every synchronous setup
+// call above (both grids, the default response-step row, wireTimbrePanel)
+// has already run and set whatever `title` attributes it's going to set.
+setAdvancedMode(storedAdvancedMode);
 
 function tickRate() {
   // Standardized master tempo, in BPM (wheel.js -- 12/8 meter, already

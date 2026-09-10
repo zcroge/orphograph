@@ -23,13 +23,13 @@
         </div>
       </label>
 
-      <div class="row">
+      <div class="row advanced-only">
         <select id="phrase-select"></select>
         <button id="save-phrase">save current as...</button>
         <button id="delete-phrase">delete selected</button>
       </div>
 
-      <div class="row" title="Every numeric slider across note timbre, drone timbre, and trace/echo visuals, as one file. Export to save/share/back up your current tuning; import to restore it -- applying a file live-updates every slider exactly as if you'd dragged it by hand.">
+      <div class="row advanced-only" title="Every numeric slider across note timbre, drone timbre, and trace/echo visuals, as one file. Export to save/share/back up your current tuning; import to restore it -- applying a file live-updates every slider exactly as if you'd dragged it by hand.">
         <button id="export-settings">export settings</button>
         <label class="inline" style="cursor: pointer;">import settings
           <input type="file" id="import-settings-file" accept="application/json" style="display: none;" />
@@ -39,6 +39,9 @@
       <div class="row">
         <button id="play">play</button>
         <button id="stop">stop</button>
+      </div>
+
+      <div class="row advanced-only">
         <button id="drone">drone: off</button>
         <label class="inline" title="Mutes everything EXCEPT the flute's own output (bass drone, real-hit notes, hocket ghost-taps -- percussion deliberately stays audible, a structural layer rather than a competing melodic voice) -- for judging the growl/chamber/breath-wave/chamber-resonance layers on their own, without guessing at them underneath everything else.">
           <input type="checkbox" id="flute-solo" /> solo flutes (mute everything else)
@@ -52,17 +55,17 @@
         </label>
       </div>
 
-      <div class="response-procession" title="The Response operator (the-codex-v1.md / master-blueprint-v2.md): 'a SELECTED transformation of the call -- from {prime, inversion, retrograde, retrograde-inversion}, with rotation-by-seven as the conventional answer when no ground compels.' An open, ordered, arbitrary-length chain of steps -- each applies to the PREVIOUS stage to produce the next, and the whole procession weaves into one continuous playback. Zero steps (default) plays exactly the call, unchanged. Mirror bounces back to its own predecessor by default (an out-and-back, the way a reflection actually behaves); rotate/retrograde restate in series at the new stage -- override either with the 'bounce' checkbox per step.">
+      <div class="response-procession advanced-only" title="The Response operator (the-codex-v1.md / master-blueprint-v2.md): 'a SELECTED transformation of the call -- from {prime, inversion, retrograde, retrograde-inversion}, with rotation-by-seven as the conventional answer when no ground compels.' An open, ordered, arbitrary-length chain of steps -- each applies to the PREVIOUS stage to produce the next, and the whole procession weaves into one continuous playback. Zero steps (default) plays exactly the call, unchanged. Mirror bounces back to its own predecessor by default (an out-and-back, the way a reflection actually behaves); rotate/retrograde restate in series at the new stage -- override either with the 'bounce' checkbox per step.">
         <div id="response-steps"></div>
         <button type="button" id="response-add-step">+ add step</button>
       </div>
 
-      <div class="row" title="'A cyclic pattern procession... cyclical transposition patterns... could drive this in a deliberate, grounded and self-resolving/musically satisfying way.' Advances the whole instrument's key center by the step below (mod 12) every time the GIVEN ring completes one full pass through the phrase -- at the default step of 7, this is literally the circle of fifths as a real-time process (visits all 12 positions, then resolves home). Shown live on the new outermost ring circumscribing the wheel. A different, decoupled layer from the step chain above -- this is a continuous real-time pitch offset, not a one-time structural transform.">
+      <div class="row advanced-only" title="'A cyclic pattern procession... cyclical transposition patterns... could drive this in a deliberate, grounded and self-resolving/musically satisfying way.' Advances the whole instrument's key center by the step below (mod 12) every time the GIVEN ring completes one full pass through the phrase -- at the default step of 7, this is literally the circle of fifths as a real-time process (visits all 12 positions, then resolves home). Shown live on the new outermost ring circumscribing the wheel. A different, decoupled layer from the step chain above -- this is a continuous real-time pitch offset, not a one-time structural transform.">
         <label class="inline"><input type="checkbox" id="transposition-enabled" checked /> cyclic transposition</label>
         <label class="inline">step (spokes)<input type="number" id="transposition-step" min="1" max="11" step="1" value="7" style="width: 48px;" /></label>
       </div>
 
-      <div class="row ring-modes">
+      <div class="row ring-modes advanced-only">
         <label class="inline">given
           <select id="mode-given"><option value="melody">melody</option><option value="chord">chord</option></select>
         </label>
@@ -74,30 +77,30 @@
         </label>
       </div>
 
-      <label class="inline" title="Experiment: when the ring-tier gate mutes a hit (a ring's own sweep passes a letter belonging to a different tier), play a soft ring-tinted click instead of true silence -- three voices at different speeds already trade off who sounds and who rests at any given spoke (structurally a hocket, the medieval technique of splitting a line across voices); this makes that already-existing structure audible as rhythm instead of just sparser melody. Only heard at tier emphasis 1.0, where a passed letter is fully silent below.">
+      <label class="inline advanced-only" title="Experiment: when the ring-tier gate mutes a hit (a ring's own sweep passes a letter belonging to a different tier), play a soft ring-tinted click instead of true silence -- three voices at different speeds already trade off who sounds and who rests at any given spoke (structurally a hocket, the medieval technique of splitting a line across voices); this makes that already-existing structure audible as rhythm instead of just sparser melody. Only heard at tier emphasis 1.0, where a passed letter is fully silent below.">
         <input type="checkbox" id="ghost-taps" checked /> hocket ghost-taps (click on muted ring-tier hits)
       </label>
 
-      <label title="1.0 = each ring only truly sounds its own tier (given/received/made), a passed letter silent -- the original hard gate. 0.0 = every ring voices the WHOLE phrase equally, in its own register. Between: a passed letter still sounds, quieter, so ring identity survives (a base-heavy phrase still leans on 'given') while every voice regains the complete phrase -- the same shape every ring's own drawn trail now traces regardless of this slider.">
+      <label class="advanced-only" title="1.0 = each ring only truly sounds its own tier (given/received/made), a passed letter silent -- the original hard gate. 0.0 = every ring voices the WHOLE phrase equally, in its own register. Between: a passed letter still sounds, quieter, so ring identity survives (a base-heavy phrase still leans on 'given') while every voice regains the complete phrase -- the same shape every ring's own drawn trail now traces regardless of this slider.">
         tier emphasis (1 = tier-only, 0 = every ring voices the whole phrase) -- <span id="tier-emphasis-readout">1.00</span>
         <input id="tier-emphasis" type="range" min="0" max="1" step="0.01" value="1" />
       </label>
 
-      <label title="A universal grounding tempo, fixed rather than adjustable -- 72 BPM is the classic textbook average resting heart rate, the same steady, unwavering pulse Gojira ('The Art of Dying') and Meshuggah ('Clockworks') both run beneath otherwise complex/polymetric material. The 6:8:12 rings' own speeds derive from this one anchor; it no longer moves.">
+      <label class="advanced-only" title="A universal grounding tempo, fixed rather than adjustable -- 72 BPM is the classic textbook average resting heart rate, the same steady, unwavering pulse Gojira ('The Art of Dying') and Meshuggah ('Clockworks') both run beneath otherwise complex/polymetric material. The 6:8:12 rings' own speeds derive from this one anchor; it no longer moves.">
         ground tempo (fixed -- a resting heart-rate anchor) -- <span id="bpm-readout">0 BPM</span>
       </label>
 
-      <label title="A real resultant rhythm (the West/Central African interlocking-bell technique) -- one kick/snare/hat kit built from all three rings' own asynchronous onsets, fired on every real hit regardless of tier emphasis or the ghost-taps checkbox above (a structural layer, not a competing melodic voice -- stays audible under flute-solo too). A distinct, louder accent marks every breath cycle (10s at the fixed ground tempo).">
+      <label class="advanced-only" title="A real resultant rhythm (the West/Central African interlocking-bell technique) -- one kick/snare/hat kit built from all three rings' own asynchronous onsets, fired on every real hit regardless of tier emphasis or the ghost-taps checkbox above (a structural layer, not a competing melodic voice -- stays audible under flute-solo too). A distinct, louder accent marks every breath cycle (10s at the fixed ground tempo).">
         percussion level -- <span id="percussion-level-readout">1.00</span>
         <input id="percussion-level" type="range" min="0" max="1" step="0.01" value="1" />
       </label>
 
-      <div class="row">
+      <div class="row advanced-only">
         <button id="connect-midi">connect MIDI (MPK25)</button>
         <span id="midi-status" class="status">not connected</span>
       </div>
 
-      <details class="timbre-panel">
+      <details class="timbre-panel advanced-only">
         <summary>note timbre (marimba/harp -- string-like attack, not harsh; dull, rich wooden body) -- standing in for the physical instrument's real resonance, tune by ear</summary>
         <div class="row timbre-presets">
           <select id="note-preset-select"><option value="">(unsaved)</option></select>
@@ -119,7 +122,7 @@
         </div>
       </details>
 
-      <details class="timbre-panel">
+      <details class="timbre-panel advanced-only">
         <summary>drone timbre (organ/talk-box hybrid -- one driving voice, ring-colored per hit, breathing + vibrato movement, formant color) -- every lever the drone touches, tune by ear</summary>
         <div class="row timbre-presets">
           <select id="drone-preset-select"><option value="">(unsaved)</option></select>
@@ -217,7 +220,7 @@
         </div>
       </details>
 
-      <details class="timbre-panel">
+      <details class="timbre-panel advanced-only">
         <summary>trace/echo visuals (the standing echo tunnel, propagating hit/burst echoes, and the master-hull echo) -- tune by eye</summary>
         <div class="row timbre-presets">
           <select id="view-preset-select"><option value="">(unsaved)</option></select>
@@ -267,21 +270,21 @@
         </div>
       </details>
 
-      <div class="readout">
+      <div class="readout advanced-only">
         <div>phase: <span id="phase">idle</span></div>
         <div>status: <span id="status"></span></div>
         <div><span id="root"></span></div>
         <div id="unknown-warning" class="unknown-warning" hidden></div>
       </div>
 
-      <div class="readout">
+      <div class="readout advanced-only">
         <div>grand convergence (all three rings landing on I at once -- a periodic conjunction, not a stop):</div>
         <div id="loop-log" class="loop-log"></div>
       </div>
     </div>
   </div>
 
-  <div class="keyboard-section">
+  <div class="keyboard-section advanced-only">
     <h2>Pictographic keyboard <span class="sub">legend + input + live highlight-on-activation -- an "unrolled" reading of the wheel: 12 spoke-columns, given/received/made rows plus a 4th for letters with no ring yet. Placeholder Latin labels for now (see README.md) -- hover a key for its object/sound and expected asset paths; a real glyph will start appearing automatically once one exists at that path.</span></h2>
     <div id="keyboard" class="keyboard"></div>
     <div class="row kbd-space-row">

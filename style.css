@@ -250,6 +250,16 @@ select#phrase-select {
 
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
+/* "The most limited UI available... keep the levers to a minimum when I
+   let other people test it." Default (no `advanced-mode` class on body):
+   every parameter lever/readout/settings row is hidden entirely, not just
+   visually de-emphasized -- play, stop, the phrase input, and the wheel's
+   own compact key-square grid are the only surviving controls. Revealed
+   by a hidden hotkey (see main.js) that adds `advanced-mode` to body;
+   `!important` here only to reliably win over `<details>`'s own default
+   display regardless of DOM position, not to fight anything else. */
+body:not(.advanced-mode) .advanced-only { display: none !important; }
+
 .response-procession { display: flex; flex-direction: column; gap: 6px; }
 .response-step-row {
   display: flex;
