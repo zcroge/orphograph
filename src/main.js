@@ -1,7 +1,7 @@
 import { deriveTrace, invalidRanges } from "./trace.js";
 import { buildProcession, describeSteps, ROTATION_SPOKE_SHIFT } from "./transform.js";
 import { hzForSpoke, PLACEHOLDER_SPOKE_OF, ringForLetter } from "./letters.js";
-import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS, WHISTLE_MAX_VOICES } from "./synth.js";
+import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS } from "./synth.js";
 import { Sequencer } from "./sequencer.js";
 import { MidiBridge } from "./midi.js";
 import { WheelView, DEFAULT_VIEW_PARAMS } from "./view.js";
@@ -284,6 +284,18 @@ function splitIntoWords(trace) {
 
 let currentTrace = [];
 let currentWords = [];
+// Object identity -> the word (currentWords entry) it belongs to -- rebuilt
+// alongside currentWords each Play. Lets onNoteHit (melody mode, one
+// letter at a time) find "the word this hit belongs to" in O(1), so the
+// native chord-voicing engine (synth.js's meanderFlute) can retune once
+// per WORD boundary instead of once per letter -- see lastFluteWordByRing.
+let wordOfEntry = new Map();
+// Per ring: the last word (object identity into currentWords) this ring's
+// own flute retune already fired for -- melody mode's onNoteHit fires
+// once per AUDIBLE letter, but the flute should only retune once per real
+// word boundary per ring (chord mode's onChordHit already IS one call per
+// word, no tracking needed there).
+const lastFluteWordByRing = { given: null, received: null, made: null };
 // Real stage-boundary metadata from transform.js's own buildProcession
 // (empty when there's no response chain) -- see the Play handler and
 // onNoteHit's own stage-crossing check below.
@@ -727,11 +739,19 @@ const sequencer = new Sequencer({
       applyVowelFromLetters([target.letter]);
       keyboard.flash(target.letter);
       legendGrid.flash(target.letter);
-      // Triatonic flute -- a real hit glides that ring's already-sustained
-      // voice to a new harmonic (see synth.js's meanderFlute); the voice
-      // itself never stops, only its pitch meanders. Skipped entirely at
+      // Native chord voicing -- retunes once per WORD boundary now, not
+      // once per letter (see the "native chord-voicing engine" plan's own
+      // flagged behavioral change): melody mode still plays individual
+      // kalimba notes per letter above, but the shared flute voice sustains
+      // one voiced chord per word, only changing at the first AUDIBLE
+      // letter of the NEXT word this ring reaches. Skipped entirely at
       // velocity 0 (emphasis 1.0, passed letter) -- unchanged from before.
-      audio.meanderFlute(ring, target.spoke);
+      const word = wordOfEntry.get(target);
+      if (word && lastFluteWordByRing[ring] !== word) {
+        lastFluteWordByRing[ring] = word;
+        const wordSpokes = word.map((e) => transposedSpoke(e.spoke));
+        audio.meanderFlute(ring, wordSpokes, wordSpokes[0]);
+      }
     } else if (!target.isRest && velocity === 0 && $("ghost-taps").checked) {
       // Hocket experiment -- this ring's own beat really did land here, it
       // just isn't this ring's letter and emphasis is fully closing it out.
@@ -788,10 +808,14 @@ const sequencer = new Sequencer({
         keyboard.flash(e.letter);
         legendGrid.flash(e.letter);
       });
-      // Triatonic flute -- one glide per struck chord (not per letter in
-      // it, the way ghost-taps also fire once per chord), toward the
-      // chord's own first sounding spoke.
-      audio.meanderFlute(ring, soundingEntries[0].spoke);
+      // Native chord voicing -- one retune per struck chord (not per
+      // letter in it, the way ghost-taps also fire once per chord), on the
+      // WORD's own full content (not just soundingEntries -- the chord's
+      // content is the word's own geometry, independent of which of its
+      // letters happen to be this ring's own tier), rooted on the word's
+      // own first letter.
+      const wordSpokes = word.map((e) => transposedSpoke(e.spoke));
+      audio.meanderFlute(ring, wordSpokes, wordSpokes[0]);
     } else if ($("ghost-taps").checked) {
       // Hocket experiment, chord-mode version -- one click for the whole
       // struck-but-silent chord (not one per muted letter; a chord is a
@@ -1095,6 +1119,9 @@ $("play").addEventListener("click", () => {
     }
     currentTrace = trace;
     currentWords = splitIntoWords(trace);
+    wordOfEntry = new Map();
+    for (const w of currentWords) for (const e of w) wordOfEntry.set(e, w);
+    lastFluteWordByRing.given = lastFluteWordByRing.received = lastFluteWordByRing.made = null;
     hullCursor.given = hullCursor.received = hullCursor.made = null;
     // Master hull -- the whole phrase's own shape (every non-rest letter,
     // in order, regardless of which ring ends up voicing it), so a word
@@ -1168,88 +1195,18 @@ $("drone").addEventListener("click", () => setDrone(!droneOn));
 // "A more direct way to survey the sound possibilities... dialed in more
 // efficiently" -- previously the only way to hear a flute-parameter
 // change was type/select a phrase and press play, waiting for a real hit
-// to land. One shared voice now (was three) -- one retune, at spoke 4
-// (the exact midpoint of the wheel-follow cosine curve between
-// whistleHarmonicMin/Max regardless of their current values, so it's
-// always a representative, not extreme, test pitch) through "received"
-// (RING_OCTAVE_MULTIPLIER's own neutral/center register, the same
-// convention construction itself defaults to at rest).
+// to land. One shared voice, one fixed representative test chord (spokes
+// 4/7/11, see below), through "received" (RING_OCTAVE_MULTIPLIER's own
+// neutral/center register, the same convention construction itself
+// defaults to at rest).
 $("whistle-audition").addEventListener("click", () => {
   audio.ensureContext();
   if (!droneOn) setDrone(true);
-  audio.meanderFlute("received", 4);
-});
-
-// "A GROUP of instruments whose harmonic relationships are parametrically
-// authored... there must be a simpler solution than what we have." One
-// authored data table instead of a separately-named slider per interval --
-// outside wireTimbrePanel's generic numeric-slider loop since this is a
-// list, not a single number, so it doesn't currently participate in
-// preset save/load/factory-reset the way the numeric drone params do.
-//
-// "The harmonic range and the voicing text field are pretty unintuitive --
-// is there a better solution that's more of a stylistic expression of
-// established musical principles?" Authored in SEMITONES from the ring's
-// own root (0=unison, 7=a fifth, 12=an octave, negative=below root) --
-// real, standard interval vocabulary any musician already knows -- rather
-// than raw frequency ratios (1.5, 1.25...) that need mental log-math to
-// place on a keyboard. Converted to the ratio synth.js's DSP layer
-// actually needs (equal temperament: 2^(semitones/12)) only here, at the
-// authoring boundary -- the underlying audio graph is untouched by this,
-// it only ever dealt in ratios and still does.
-function semitoneVoicingToRatio(semitones) {
-  return Math.pow(2, semitones / 12);
-}
-function parseWhistleVoicing(text) {
-  const voices = text.split(",").map((chunk) => {
-    const [semitoneStr, levelStr] = chunk.split(":");
-    const semitones = parseFloat(semitoneStr);
-    const level = parseFloat(levelStr);
-    return Number.isFinite(semitones) && Number.isFinite(level)
-      ? { ratio: semitoneVoicingToRatio(semitones), level }
-      : null;
-  }).filter(Boolean).slice(0, WHISTLE_MAX_VOICES);
-  return voices;
-}
-const whistleVoicingInput = $("dp-whistleVoicingText");
-// Same "preserve the last session, not just named presets" treatment as
-// wireTimbrePanel's numeric params -- this field lives outside that
-// generic system (a list, not a number), so it needs its own restore/save.
-const whistleVoicingSession = loadLastSession("whistleVoicingText");
-if (whistleVoicingSession && whistleVoicingSession.text) {
-  whistleVoicingInput.value = whistleVoicingSession.text;
-}
-function applyWhistleVoicingText() {
-  const parsed = parseWhistleVoicing(whistleVoicingInput.value);
-  if (parsed.length === 0) return; // malformed/empty edit -- never silence the whole flute over a typo
-  audio.setDroneParam("whistleVoicing", parsed);
-  saveLastSession("whistleVoicingText", { text: whistleVoicingInput.value });
-}
-applyWhistleVoicingText();
-whistleVoicingInput.addEventListener("change", () => {
-  applyWhistleVoicingText();
-  $("whistle-chord-preset").value = ""; // hand-edited -- no longer exactly the selected preset
-});
-
-// Real, named chord voicings (standard music theory, not invented ratios)
-// as a starting point -- semitones:level strings, same format the text
-// field itself takes, so picking one is just filling the field and
-// applying it the normal way.
-const WHISTLE_CHORD_PRESETS = {
-  octaveStack: "-12:0.6, 0:1, 7:0.6, 12:0.5",
-  unison: "0:1",
-  openFifths: "0:1, 7:0.6, 12:0.4",
-  majorTriad: "0:1, 4:0.5, 7:0.5",
-  minorTriad: "0:1, 3:0.5, 7:0.5",
-  sus4: "0:1, 5:0.5, 7:0.5",
-  add9: "0:1, 7:0.5, 14:0.35",
-  wideSpread: "-12:0.5, 0:1, 7:0.4, 12:0.4, 19:0.3",
-};
-$("whistle-chord-preset").addEventListener("change", (e) => {
-  const preset = WHISTLE_CHORD_PRESETS[e.target.value];
-  if (!preset) return; // "(custom)" -- leave whatever's currently typed alone
-  whistleVoicingInput.value = preset;
-  applyWhistleVoicingText();
+  // A fixed, representative test chord (spokes 4/7/11 -- not derived from
+  // any real typed phrase) through "received" (RING_OCTAVE_MULTIPLIER's
+  // own neutral/center register), so a slider change can be heard
+  // immediately without typing a phrase or pressing play.
+  audio.meanderFlute("received", [4, 7, 11], 4);
 });
 
 // "More tailored control over modal arrangement" -- the shared scale
@@ -1356,33 +1313,15 @@ function wordPitchClasses(word) {
   return spokes;
 }
 
-// Named vocal-register presets instead of raw harmonic-index numbers --
-// sets the SAME whistleHarmonicMin/Max sliders wireTimbrePanel already
-// wired up above (dispatching "input" so that existing listener does the
-// actual apply/number-field-sync/preset-select-reset, rather than
-// duplicating that logic here), just picked by ear-recognizable name.
-// Each keeps roughly the same Min:Max span (a fifth) phase 17 found kept
-// the cluster's full spread out of "dull or shrill with no middle" --
-// "wide" is the one deliberate exception, offered as a clearly labeled
-// choice now rather than an accidental default.
-const WHISTLE_REGISTER_PRESETS = {
-  bass: { min: 4, max: 6 },
-  tenor: { min: 6, max: 9 },
-  alto: { min: 8, max: 11 },
-  soprano: { min: 9, max: 13 },
-  wide: { min: 4, max: 13 },
-};
+// Named vocal-register presets (whistleHarmonicMin/Max) retired along with
+// the harmonic-sweep pitch model they tuned -- see the native chord-voicing
+// engine plan. setSliderValue survives; other callers still use it
+// (below, and the settings-import feature further down).
 function setSliderValue(id, value) {
   const el = $(id);
   el.value = value;
   el.dispatchEvent(new Event("input", { bubbles: true }));
 }
-$("whistle-register-preset").addEventListener("change", (e) => {
-  const preset = WHISTLE_REGISTER_PRESETS[e.target.value];
-  if (!preset) return;
-  setSliderValue("dp-whistleHarmonicMin", preset.min);
-  setSliderValue("dp-whistleHarmonicMax", preset.max);
-});
 
 $("vowel-select").addEventListener("change", (e) => {
   audio.setVowelFormant(e.target.value);
@@ -1528,7 +1467,7 @@ const DRONE_PANEL_KEYS = [
   "busGain",
   "breathPulsesPerCycle", "breathDepth", "vibratoCyclesPerPulse", "vibratoCents", "breathNoiseGain",
   "formantF1Q", "formantF2Q", "formantBlendGain",
-  "whistleHarmonic", "whistleHarmonicMin", "whistleHarmonicMax", "whistleFloorHz", "whistleCeilingHz",
+  "whistleManualRatio", "whistleVoicingArcSpokesPerOctave", "whistleFloorHz", "whistleCeilingHz",
   "whistleRingRegisterBias",
   "whistleGlideMs", "whistleNoteGateDipAmount",
   "whistleDetuneCents",
@@ -1654,16 +1593,15 @@ $("import-settings-file").addEventListener("change", async (e) => {
   select.addEventListener("change", (e) => sequencer.setRingMode(ring, e.target.value));
 });
 
-// Triatonic flute -- each ring's own rotation drives which harmonic that
-// ring's OWN flute voice sounds (see synth.js's pulseDrone), rather than
-// requiring a hand on the shared "which harmonic" slider. That manual
-// slider is disabled while following, since every ring overwrites its own
-// voice every pulse anyway -- leaving it enabled would just be misleading,
-// not functional.
+// Native chord voicing -- each word's own real letters drive the shared
+// flute voice's chord (see synth.js's meanderFlute/src/voicing.js), rather
+// than a hand on a manual pitch slider. That manual slider is disabled
+// while following, since every real hit overwrites the voice's pitch
+// anyway -- leaving it enabled would just be misleading, not functional.
 function applyWhistleFollow(following) {
   audio.setWhistleFollowsWheel(following);
-  $("dp-whistleHarmonic").disabled = following;
-  $("dp-whistleHarmonic-n").disabled = following;
+  $("dp-whistleManualRatio").disabled = following;
+  $("dp-whistleManualRatio-n").disabled = following;
 }
 applyWhistleFollow($("whistle-follow").checked);
 $("whistle-follow").addEventListener("change", (e) => applyWhistleFollow(e.target.checked));

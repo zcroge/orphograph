@@ -12,7 +12,15 @@
 // two-band formant-ish coloring (vaguely "oh"-shaped, tying to O's own
 // spoken reading), and a synthetic convolution reverb for space and length.
 
-import { ringSpeedMultiplier, spokeAngle, RING_OCTAVE_MULTIPLIER } from "./wheel.js";
+import { ringSpeedMultiplier, spokeAngle, rotateSpoke, normalizeSpoke, RING_OCTAVE_MULTIPLIER } from "./wheel.js";
+import { hzForSpoke } from "./letters.js";
+import { voiceWord, DEFAULT_ARC_SPOKES_PER_OCTAVE } from "./voicing.js";
+
+// O's own pole spoke (wheel.js: I at top, O at bottom) -- the drone's fixed
+// anchor, in spoke terms. Used to find which pitch class the drone is
+// CURRENTLY holding (rotateSpoke by the live transposition offset) for the
+// native voicing engine's own rootless rule -- see meanderFlute.
+const DRONE_POLE_SPOKE = 7;
 
 const RINGS = ["given", "received", "made"];
 
@@ -334,11 +342,19 @@ export const DEFAULT_DRONE_PARAMS = {
   // not just the unison layer, lands in 117-1400Hz across all three
   // rings -- a real alto/tenor-to-soprano-extreme band, with the harmonic
   // knob's own sweep now a controllable fraction of it instead of most of
-  // it. whistleHarmonic (manual/fallback pitch) kept at 8, already inside
-  // the new range.
-  whistleHarmonic: 8,
-  whistleHarmonicMin: 1,
-  whistleHarmonicMax: 10,
+  // it. whistleManualRatio (manual/fallback pitch, whistle-follow off) is
+  // a plain ratio-of-root, not a harmonic index -- see its own comment
+  // below, near the native voicing engine's own tunable.
+  whistleManualRatio: 1,
+  // The native chord-voicing engine's one real lever (see src/voicing.js
+  // and the "native chord-voicing engine" plan) -- how many spokes of
+  // arc-distance from a chord's root earn that voice one more octave out.
+  // Defaults to 2 (12 spokes / 6, the Timaeus proportion's own smallest
+  // member -- not a freehand pick, the same 6:8:12 ratio already governing
+  // ring speed, one level down). Lower = voices spread out faster (an
+  // "open," wide-register instrument); higher = voices stay clustered
+  // near the root longer (a "closed," tight-register one).
+  whistleVoicingArcSpokesPerOctave: DEFAULT_ARC_SPOKES_PER_OCTAVE,
   // "I don't want the spacey, high pitched flute sound. The kalimba covers
   // the high pitched melodic notes, I want the flute drones to stay below a
   // more contained ceiling to keep it from becoming shrill/whistly." The
@@ -381,37 +397,20 @@ export const DEFAULT_DRONE_PARAMS = {
   // not an additive oscillator stack (phases 9-23 built and refined one;
   // "is this a common issue... is there a free asset" -- README phase 24
   // has the full "why" a real sample replaced it entirely). whistleAmount
-  // is the MASTER flute level -- every voice in whistleVoicing below
-  // scales relative to it.
+  // is the MASTER flute level -- every voice this._whistleActiveVoices
+  // computes (see meanderFlute/voiceWord) scales relative to it.
   whistleAmount: 0.4,
 
-  // "We have harmonizing parameters, but not a GROUP of instruments whose
-  // harmonic relationships are parametrically authored -- that's the
-  // missing piece to our orchestral flute pad... there must be a simpler
-  // solution than what we have." Correctly caught: whistleLowOctaveAmount/
-  // whistleChordFifthAmount/whistleHighOctaveAmount (phases 13/15) were
-  // three separately-named, separately-coded sliders, each added in its
-  // own phase for one specific hardcoded ratio (0.5x/1.5x/2x) -- exactly
-  // "harmonizing parameters" bolted on one at a time, not a real authored
-  // ensemble. Consolidated into ONE data table instead: whistleVoicing, a
-  // list of {ratio, level} voices (up to WHISTLE_MAX_VOICES), each ratio a
-  // multiple of this ring's own current pitch and each level relative to
-  // whistleAmount above -- editable as data (see the UI's single voicing
-  // field), not one hardcoded slider per interval. Adding, removing, or
-  // retuning a voice is now an edit to this table, not new code. Default
-  // reproduces the exact same 4-voice registration phases 9-15 arrived at
-  // (octave-down/unison/fifth/octave-up) so nothing changes on its own --
-  // the point is making the NEXT chord shape a data edit instead of a
-  // code change, real precedent for exactly this being a pipe organ's own
-  // registration (16'/8'/4' stops) plus "mixture"/mutation ranks (a Quint
-  // fifth, sometimes a Tierce third) -- genuine chord tones under one key,
-  // authored per-instrument rather than derived from a fixed formula.
-  whistleVoicing: [
-    { ratio: 0.5, level: 0.6 },
-    { ratio: 1, level: 1 },
-    { ratio: 1.5, level: 0.6 },
-    { ratio: 2, level: 0.5 },
-  ],
+  // whistleVoicing (a fixed, hand-authored {ratio, level} chord table) is
+  // RETIRED -- "the whole voicing layer is [arbitrary]," picked for being
+  // an established jazz/organ-registration convention, not for any tie to
+  // the wheel's own geometry. Replaced by the native chord-voicing engine
+  // (src/voicing.js): every word's own real letters compute their OWN
+  // {ratio, level} voices live, from spoke arc-distance and the mirror/
+  // rotate transform vocabulary already governing this piece at every
+  // other scale -- see meanderFlute and this._whistleActiveVoices. Nothing
+  // left to author here; the "next chord shape" is now the next word
+  // typed, not a data edit.
 
   // "More tailored control over modal arrangement" -- see
   // DEFAULT_FLUTE_SCALE_SEMITONES/quantizeFluteHz above for the full
@@ -673,17 +672,17 @@ export const DEFAULT_DRONE_PARAMS = {
   whistleBoxAmountDb: 3,
 };
 
-// See whistleVoicing above -- a FIXED number of voice slots are always
-// built per ring (never created/destroyed while the drone runs), so
-// authoring a new table (adding, removing, or retuning a voice) is always
-// just retuning/relevelling existing oscillators -- the same live-update
-// path every other flute param already uses -- rather than a live audio-
-// graph rebuild with its own click/glitch risk. Slots beyond the current
-// table's length sit at level 0 (silent, negligible CPU for a few idle
-// sine oscillators) until the table is extended into them.
+// See this._whistleActiveVoices (meanderFlute/src/voicing.js) -- a FIXED
+// number of voice slots are always built (never created/destroyed while
+// the drone runs), so a new word's own realized voicing is always just
+// retuning/relevelling existing oscillators -- the same live-update path
+// every other flute param already uses -- rather than a live audio-graph
+// rebuild with its own click/glitch risk. Slots beyond however many
+// voices the current word actually needs sit at level 0 (silent,
+// negligible CPU for a few idle sine oscillators).
 export const WHISTLE_MAX_VOICES = 6;
-// A silent placeholder for any slot the current whistleVoicing table
-// doesn't fill.
+// A silent placeholder for any slot this._whistleActiveVoices doesn't
+// fill.
 const WHISTLE_EMPTY_VOICE = { ratio: 1, level: 0 };
 
 // Same fixed-slot-count precedent as WHISTLE_MAX_VOICES, applied to the
@@ -710,9 +709,9 @@ const FLUTE_CHAMBER_MAX_MODES = 6;
 // partial mix left to rebalance; breath-tone wander coupling and the
 // note-gate articulation stage are otherwise unchanged. octaveMult/
 // levelScale/sampleBaseHz are kept on the returned object (octaveMult/
-// levelScale are later MUTATED by setDroneParam's whistleVoicing case;
-// sampleBaseHz is read by every later playbackRate retune so it always
-// divides by the SAME sample this layer actually holds).
+// levelScale are later MUTATED by _applyWhistleVoicesToLayers, every real
+// word hit; sampleBaseHz is read by every later playbackRate retune so it
+// always divides by the SAME sample this layer actually holds).
 function buildFluteToneLayer(ctx, dp, octaveMult, levelScale, layerHz, vibratoLfo, wanderLowpass, sample, voiceIndex) {
   const toneGain = ctx.createGain();
   toneGain.gain.value = dp.whistleAmount * levelScale;
@@ -971,24 +970,27 @@ export class OrphographAudio {
     // one-shot note, so setDroneParam (below) also pushes changes into the
     // live AudioParams immediately when the drone is on, instead of only
     // taking effect on the next playNote() call.
-    // whistleVoicing is an array -- a shallow spread would alias it back
-    // to DEFAULT_DRONE_PARAMS itself (the exported "factory default" every
+    // whistleScale is an array -- a shallow spread would alias it back to
+    // DEFAULT_DRONE_PARAMS itself (the exported "factory default" every
     // reset/preset reconstruction relies on), so any future in-place edit
-    // to this instance's table would silently corrupt that shared default
+    // to this instance's list would silently corrupt that shared default
     // too. Cloned one level deep here specifically for that reason.
     this.droneParams = {
       ...DEFAULT_DRONE_PARAMS,
-      whistleVoicing: DEFAULT_DRONE_PARAMS.whistleVoicing.map((v) => ({ ...v })),
       whistleScale: [...DEFAULT_DRONE_PARAMS.whistleScale],
     };
-    // _fluteTargetHz's own "current harmonic" state -- normally only ever
-    // set by a real hit (meanderFlute) or the manual whistleHarmonic slider
-    // (setDroneParam), but setDroneVoices's first-ever build computes the
-    // voice's starting pitch through that same shared method before either
-    // of those has fired once, so it needs a real starting value here, not
-    // undefined (which _fluteTargetHz would otherwise read as harmonic 0 --
-    // a silent flute on the very first drone start).
-    this._whistleHarmonicByRing = this.droneParams.whistleHarmonic;
+    // The native voicing engine's own live state (see meanderFlute,
+    // src/voicing.js) -- normally only ever set by a real hit, but
+    // setDroneVoices's first-ever build computes the voice's starting
+    // pitch/layer levels through that same shared machinery before any
+    // hit has fired once, so it needs real starting values here, not
+    // undefined. A single silent root voice (WHISTLE_MAX_VOICES' slot 0
+    // only) until the first real word voices a chord.
+    this._whistleActiveVoices = [{ ratio: 1, level: 1, isDoubling: false }];
+    this._whistlePreviousVoicing = null;
+    this._whistlePreviousPcSpokes = null;
+    this._whistleChordRootHz = 0;
+    this._transpositionOffsetSpokes = 0;
 
     // Per-ring mute (setDroneMute) is retired -- "one driving bass drone,
     // one meandering flute narrative" means there's only one instance of
@@ -1074,10 +1076,16 @@ export class OrphographAudio {
   // clamp, so this can never push a layer outside the authored range
   // either.
   static RING_REGISTER_BIAS_SIGN = { given: -1, received: 0, made: 1 };
-  _fluteTargetHz(rootHz = this._effectiveDroneBaseHz()) {
+  // rootHz now defaults to this._whistleChordRootHz -- the chord's own
+  // real root pitch (hzForSpoke of whichever letter started the current
+  // word, see meanderFlute), NOT a "harmonic of the drone's O" multiplier
+  // anymore (that whole indirection retired with whistleHarmonic). The
+  // explicit-argument override stays for construction/chamber-retune,
+  // which run before a chord root has ever been set.
+  _fluteTargetHz(rootHz = this._whistleChordRootHz || this._effectiveDroneBaseHz()) {
     const ring = this._whistleLastRing || "received";
     const bias = Math.pow(2, (OrphographAudio.RING_REGISTER_BIAS_SIGN[ring] || 0) * (this.droneParams.whistleRingRegisterBias || 0));
-    return rootHz * RING_OCTAVE_MULTIPLIER[ring] * (this._whistleHarmonicByRing || 0) * bias;
+    return rootHz * RING_OCTAVE_MULTIPLIER[ring] * bias;
   }
 
   // See foldIntoRange/whistleCeilingHz's own comment for the "why." Returns
@@ -1114,7 +1122,7 @@ export class OrphographAudio {
     if (!(targetHz > 0)) return 1;
     const floorHz = dp.whistleFloorHz, ceilingHz = dp.whistleCeilingHz;
     if (!(ceilingHz > floorHz && floorHz > 0)) return 1;
-    const activeRatios = (dp.whistleVoicing || [])
+    const activeRatios = (this._whistleActiveVoices || [])
       .filter((v) => v.level > 0 && v.ratio > 0)
       .map((v) => v.ratio);
     const maxRatio = activeRatios.length ? Math.max(...activeRatios) : 1;
@@ -1157,10 +1165,18 @@ export class OrphographAudio {
   // passing the raw incoming `baseHz` unchanged -- they run before
   // `_droneBaseHz`/`_transpositionRatio` are settled, the same reason they
   // already bypassed `_effectiveDroneBaseHz()`.
+  // Quantization is skipped entirely while whistleFollowsWheel is on --
+  // every voice's pitch already IS a real letter's own exact 12-TET spoke
+  // (see voiceWord), so snapping it again to a scale (possibly a hand-set
+  // preset that doesn't even contain that pitch class) could only ever
+  // corrupt it. `whistleScale`/quantizeFluteHz stay live for the manual/
+  // fallback path only (whistle-follow off), per the native voicing
+  // engine's own design.
   _fluteLayerHz(targetHz, octaveMult, rootHz = this._effectiveMelodicRootHz() || this._effectiveDroneBaseHz()) {
     const dp = this.droneParams;
-    const quantized = quantizeFluteHz(targetHz * octaveMult, rootHz, dp.whistleScale);
-    return Math.min(dp.whistleCeilingHz, Math.max(dp.whistleFloorHz, quantized));
+    const raw = targetHz * octaveMult;
+    const value = this.whistleFollowsWheel ? raw : quantizeFluteHz(raw, rootHz, dp.whistleScale);
+    return Math.min(dp.whistleCeilingHz, Math.max(dp.whistleFloorHz, value));
   }
 
   // Recomputes every level-dependent gain on ONE flute tone layer from
@@ -1198,6 +1214,24 @@ export class OrphographAudio {
     glide(layer.toneColorFilter.frequency, this._toneColorHzFor(layerHz, dp.whistleToneColorRatio, brightness));
     glide(layer.vibratoAmpDepth.gain, dp.whistleAmount * ls * dp.whistleVibratoAmpDepth);
     glide(layer.toneWanderDepth.gain, dp.whistleAmount * ls * dp.whistleBreathToneCoupling * 0.3);
+  }
+
+  // Pushes this._whistleActiveVoices (the native voicing engine's own
+  // current output, see meanderFlute/voiceWord) into each fixed layer
+  // slot's bookkeeping (octaveMult/levelScale) and re-applies its GAIN
+  // from that -- but deliberately does NOT touch pitch (playbackRate)
+  // here. Pitch retuning stays inside meanderFlute's own dip-masked gate
+  // (the tongued-articulation envelope), timed to hide the fingering
+  // change, same as every other real-hit retune in this file; this only
+  // updates which ratio/level each slot is ABOUT to glide toward.
+  _applyWhistleVoicesToLayers(dv, dp, now) {
+    const voices = this._whistleActiveVoices || [];
+    dv.whistleLayers.forEach((layer, i) => {
+      const voice = voices[i] || WHISTLE_EMPTY_VOICE;
+      layer.octaveMult = voice.ratio;
+      layer.levelScale = voice.level;
+      this._applyFluteLayerLevel(dv, dp, i, now);
+    });
   }
 
   // See whistleToneColorRatio -- this layer's own tone-color cutoff, as a
@@ -1257,7 +1291,7 @@ export class OrphographAudio {
     // own outer bounds here (rather than the fundamental's real ones)
     // left t stuck around 0.35-0.65 instead of reaching [0,1] -- measured
     // directly, not assumed.
-    const activeRatios = (dp.whistleVoicing || []).filter((v) => v.level > 0 && v.ratio > 0).map((v) => v.ratio);
+    const activeRatios = (this._whistleActiveVoices || []).filter((v) => v.level > 0 && v.ratio > 0).map((v) => v.ratio);
     const maxRatio = activeRatios.length ? Math.max(...activeRatios) : 1;
     const minRatio = activeRatios.length ? Math.min(...activeRatios) : 1;
     const lowRefHz = dp.whistleFloorHz / minRatio;
@@ -1424,27 +1458,10 @@ export class OrphographAudio {
           layer.source.detune.setTargetAtTime(sign * (value / 2), this.ctx.currentTime, 0.05);
         });
         break;
-      // "A GROUP of instruments whose harmonic relationships are
-      // parametrically authored" -- the whole table just changed. Every
-      // slot re-reads its own ratio/level from it (silent
-      // WHISTLE_EMPTY_VOICE for any slot beyond the new table's length),
-      // and because the RATIO can change now (not just a level, the way
-      // the old fixed-ratio sliders worked), each slot's pitch is re-
-      // derived from the voice's own current target too, not just
-      // releveled -- a genuine live-editable voicing, not a fixed set of
-      // named amounts.
-      case "whistleVoicing": {
-        const targetHz = this._fluteFundamentalHz();
-        dv.whistleLayers.forEach((layer, i) => {
-          const voice = value[i] || WHISTLE_EMPTY_VOICE;
-          layer.octaveMult = voice.ratio;
-          layer.levelScale = voice.level;
-          const layerHz = this._fluteLayerHz(targetHz, voice.ratio);
-          glide(layer.source.playbackRate, layerHz / layer.sampleBaseHz);
-          this._applyFluteLayerLevel(dv, this.droneParams, i, now);
-        });
-        break;
-      }
+      // whistleVoicing (the authored {ratio, level} table) is retired --
+      // see this._whistleActiveVoices/meanderFlute/src/voicing.js. No case
+      // needed: the native voicing engine recomputes on every real word
+      // hit, not from a standing table a slider could edit.
       case "whistleBreathAmount":
         this._applyFluteBreathLevel(dv, this.droneParams, now);
         break;
@@ -1490,13 +1507,14 @@ export class OrphographAudio {
       case "whistleBoxHz": glide(dv.whistleBox.frequency, value); break;
       case "whistleBoxQ": glide(dv.whistleBox.Q, value); break;
       case "whistleBoxAmountDb": glide(dv.whistleBox.gain, value); break;
-      case "whistleHarmonic": {
+      case "whistleManualRatio": {
         // Manual/fallback pitch -- when whistleFollowsWheel is off, this
         // is the ONE flute pitch control, a single user-facing slider (not
         // a per-ring real-hit event), so moving it retunes the one voice
         // directly. Glides, same as a real letter-hit would, rather than
-        // snapping.
-        this._whistleHarmonicByRing = value;
+        // snapping. No-ops harmlessly while following is on (the next real
+        // word overwrites it anyway).
+        this._whistleChordRootHz = this._effectiveDroneBaseHz() * value;
         const targetHz = this._fluteFundamentalHz();
         dv.whistleLayers.forEach((layer) => {
           const layerHz = targetHz * layer.octaveMult;
@@ -1506,11 +1524,12 @@ export class OrphographAudio {
         });
         break;
       }
-      // whistleHarmonicMin/Max/whistleGlideMs need no case -- Min/Max only
-      // affect the target the NEXT real hit computes; glide-time only
-      // affects how a FUTURE glide is shaped, not anything currently
-      // sounding. whistleBreathSurgeAmount is read live by meanderFlute at
-      // the moment of the next real hit, same reason.
+      // whistleVoicingArcSpokesPerOctave/whistleGlideMs need no case --
+      // the former only affects the target the NEXT real hit's voiceWord
+      // call computes; glide-time only affects how a FUTURE glide is
+      // shaped, not anything currently sounding. whistleBreathSurgeAmount
+      // is read live by meanderFlute at the moment of the next real hit,
+      // same reason.
     }
   }
 
@@ -1661,20 +1680,54 @@ export class OrphographAudio {
   // them. Still only fires on the ring that actually triggered it; what
   // changed is that every ring now retunes the SAME shared voice instead
   // of each owning a separate one.
-  meanderFlute(ring, spoke) {
+  // `wordSpokes` is the current word's own letters' spokes, IN ORDER, WITH
+  // repeats (already transposed -- main.js's onNoteHit/onChordHit build
+  // this the same way they build every other real pitch), `rootSpoke` its
+  // own chord root (by convention, the word's first letter). Both are
+  // ignored when whistleFollowsWheel is off (the manual/fallback path
+  // needs neither -- see whistleManualRatio).
+  meanderFlute(ring, wordSpokes, rootSpoke) {
     if (!this.droneOn || !this.droneVoices) return;
     const dp = this.droneParams;
     const dv = this.droneVoices;
     const now = this.ctx.currentTime;
 
-    const harmonic = this.whistleFollowsWheel
-      ? dp.whistleHarmonicMin + (dp.whistleHarmonicMax - dp.whistleHarmonicMin) *
-          (1 - (1 + Math.cos(spokeAngle(spoke))) / 2) // 1 at spoke 1 -> min; 0 at spoke 7 -> max
-      : dp.whistleHarmonic;
+    this._whistleLastRing = ring;
     const glideTc = Math.max(0.02, dp.whistleGlideMs) / 1000;
 
-    this._whistleHarmonicByRing = harmonic;
-    this._whistleLastRing = ring;
+    // The native voicing engine (src/voicing.js) -- every word's own real
+    // letters compute their own chord, replacing the old cosine-by-spoke-
+    // angle harmonic sweep entirely. See the "native chord-voicing engine"
+    // plan for the full rationale.
+    if (this.whistleFollowsWheel && wordSpokes && wordSpokes.length) {
+      const dronePitchClass = rotateSpoke(DRONE_POLE_SPOKE, this._transpositionOffsetSpokes);
+      const { voices, pcSpokes } = voiceWord(wordSpokes, rootSpoke, {
+        arcSpokesPerOctave: dp.whistleVoicingArcSpokesPerOctave,
+        dronePitchClass,
+        previousPcSpokes: this._whistlePreviousPcSpokes,
+        previousVoicing: this._whistlePreviousVoicing,
+        maxVoices: WHISTLE_MAX_VOICES,
+      });
+      this._whistlePreviousVoicing = voices;
+      this._whistlePreviousPcSpokes = pcSpokes;
+      // Root voice loudest; a real companion voice (rule 2) a shade under
+      // it; a mirror-echo doubling (rule 4) softer still, since it's an
+      // echo of a voice already sounding, not new content -- same "root
+      // loudest, companions softer" shape the old authored table used
+      // (1 / 0.6 / 0.5), just assigned by role now, not by fixed ratio.
+      this._whistleActiveVoices = voices.map((v) => ({
+        ratio: v.ratio,
+        level: v.isDoubling ? 0.45 : v.spoke === normalizeSpoke(rootSpoke) ? 1 : 0.6,
+      }));
+      this._whistleChordRootHz = hzForSpoke(rootSpoke);
+    } else if (!this.whistleFollowsWheel) {
+      // Manual/fallback -- a single static voice at whatever
+      // whistleManualRatio last set (see setDroneParam), unrelated to any
+      // real word; a real hit still articulates (the gate/breath/chiff
+      // below all still fire), it just doesn't change pitch.
+      this._whistleActiveVoices = [{ ratio: 1, level: 1 }];
+    }
+    this._applyWhistleVoicesToLayers(dv, dp, now);
     const targetHz = this._fluteFundamentalHz();
 
     // Derived, not arbitrary -- "as many parameters as possible should
@@ -1811,6 +1864,11 @@ export class OrphographAudio {
   // _effectiveDroneBaseHz) -- no new call sites at meanderFlute etc. needed.
   setTranspositionOffset(spokes) {
     this._transpositionRatio = Math.pow(2, (spokes || 0) / 12);
+    // Kept as a raw spoke count too (not just the derived ratio) -- the
+    // native voicing engine's rootless rule (meanderFlute) needs to know
+    // which SPOKE the drone's pole tone currently sits on, not just its
+    // Hz multiplier.
+    this._transpositionOffsetSpokes = spokes || 0;
   }
 
   // The root every FLUTE pitch computation should read -- _droneBaseHz
@@ -2872,24 +2930,24 @@ export class OrphographAudio {
       if (!(this._chamberRootHz > 0)) this._chamberRootHz = baseHz;
 
       // "One meandering flute" -- ringHz uses RING_OCTAVE_MULTIPLIER now
-      // (the CENTER register, since whistleHarmonic is the manual/fallback
-      // pitch with no ring context yet -- meanderFlute's own per-event
-      // retune is where a real hit's ring actually shifts register), not
-      // RING_RATIO (that table is retired from the flute entirely -- still
-      // used by the drone's own per-event nudge, see pulseDrone).
-      // this._whistleHarmonicByRing/_whistleLastRing aren't set yet on the
-      // very first build (still at their constructor defaults, "received"
-      // + whatever dp.whistleHarmonic is), so _fluteFundamentalHz reads
-      // exactly the pre-fold formula did here -- the fold itself is new.
+      // (the CENTER register, since there's no real word/chord-root context
+      // yet -- meanderFlute's own per-event retune is where a real hit's
+      // ring/chord actually shifts pitch/register), not RING_RATIO (that
+      // table is retired from the flute entirely -- still used by the
+      // drone's own per-event nudge, see pulseDrone). this._whistleLastRing
+      // isn't set yet on the very first build (still at its constructor
+      // default, "received"), so _fluteFundamentalHz reads exactly the
+      // pre-fold formula did here -- the fold itself is new.
       const ringHz = this._fluteFundamentalHz(baseHz);
 
-      // Authored voicing -- a fixed WHISTLE_MAX_VOICES slots, each sourced
-      // from whistleVoicing[i] (silent WHISTLE_EMPTY_VOICE beyond the
-      // table's current length). See whistleVoicing above/buildFluteToneLayer
-      // below.
+      // this._whistleActiveVoices -- a fixed WHISTLE_MAX_VOICES slots, each
+      // sourced from the native voicing engine's own current output
+      // (silent WHISTLE_EMPTY_VOICE beyond however many voices are
+      // currently active; just the root, silent elsewhere, until the first
+      // real word voices a chord -- see the constructor).
       const whistleLayers = [];
       for (let i = 0; i < WHISTLE_MAX_VOICES; i++) {
-        const voice = dp.whistleVoicing[i] || WHISTLE_EMPTY_VOICE;
+        const voice = this._whistleActiveVoices[i] || WHISTLE_EMPTY_VOICE;
         const layerHz = this._fluteLayerHz(ringHz, voice.ratio, baseHz);
         const sample = this._pickFluteSample(layerHz);
         whistleLayers.push(buildFluteToneLayer(ctx, dp, voice.ratio, voice.level, layerHz, whistleVibratoLfo, wanderLowpass, sample, i));
@@ -3086,9 +3144,9 @@ export class OrphographAudio {
       whistleBox.connect(this.reverbSend);
 
       this._droneBaseHz = baseHz;
-      // Scalars now, not ring-keyed -- one voice, one current harmonic/
+      // Scalars now, not ring-keyed -- one voice, one current chord-root/
       // brightness state. See _updateFluteBrightness/meanderFlute.
-      this._whistleHarmonicByRing = dp.whistleHarmonic;
+      this._whistleChordRootHz = baseHz;
 
       this.droneVoices = {
         bus, oscs, ringGain, sub, subGain, droneSaturator,
