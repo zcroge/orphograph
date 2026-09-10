@@ -1529,6 +1529,7 @@ const DRONE_PANEL_KEYS = [
   "breathPulsesPerCycle", "breathDepth", "vibratoCyclesPerPulse", "vibratoCents", "breathNoiseGain",
   "formantF1Q", "formantF2Q", "formantBlendGain",
   "whistleHarmonic", "whistleHarmonicMin", "whistleHarmonicMax", "whistleFloorHz", "whistleCeilingHz",
+  "whistleRingRegisterBias",
   "whistleGlideMs", "whistleNoteGateDipAmount",
   "whistleDetuneCents",
   "whistleAmount",
@@ -1538,11 +1539,12 @@ const DRONE_PANEL_KEYS = [
   "whistleBrightnessTempoSensitivity", "whistleBrightnessReferencePps", "whistleToneColorRatio",
   "whistleChamberAmountDb", "whistleChamberQ", "whistleChamberModes",
   "whistleGrowlAmount", "whistleGrowlF1Hz", "whistleGrowlF2Hz", "whistleGrowlQ",
-  "whistleGrowlWanderHz", "whistleGrowlWanderDepth",
+  "whistleGrowlWanderHz", "whistleGrowlWanderDepth", "whistleGrowlSaturationAmount",
   "whistleDroneWaveCyclesPerRingPulse", "whistleDroneWaveDepth",
   "whistleThroatAmount", "whistleThroatSubharmonicAmount",
   "whistleBoxHz", "whistleBoxQ", "whistleBoxAmountDb",
   "moveFilterHz", "moveFilterPulsesPerCycle", "moveFilterDepthHz", "bassBoostHz", "bassBoostDb",
+  "droneSubharmonicAmount", "droneSaturationAmount",
 ];
 const VIEW_PANEL_KEYS = Object.keys(DEFAULT_VIEW_PARAMS);
 

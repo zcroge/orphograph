@@ -109,6 +109,36 @@ function foldIntoRange(hz, floorHz, ceilingHz) {
   return Math.min(ceilingHz, Math.max(floorHz, out));
 }
 
+// "There is no roughness-generating mechanism anywhere in the codebase --
+// both the bass drone and the flute's growl are pure sine partials behind
+// linear biquad filters, structurally 'vocal/organ,' never 'rough/buzzy,'
+// regardless of tuning." A bandpass EQ bump (growl's own previous entire
+// mechanism) can only emphasize existing content; it cannot GENERATE new
+// harmonic content the way real vocal-tract/didgeridoo roughness actually
+// works. This is the real fix: a soft-clip (tanh) waveshaper curve, the
+// standard way to add genuine odd-harmonic-rich distortion without hard
+// digital clipping. Normalized so curve(+-1) always maps to +-1 (no
+// overall level jump as `amount` -- and therefore `drive` -- changes, only
+// the SHAPE in between gets more aggressively curved) -- amount 0 returns
+// a true identity curve (bypass), not just a very mild tanh, so "off"
+// genuinely means off. Regenerated (not automated) on param change --
+// WaveShaperNode.curve isn't an AudioParam, but this only ever changes on
+// a slider drag, never per-frame, so the lack of a glide is inaudible.
+function buildSaturationCurve(amount, samples = 1024) {
+  const curve = new Float32Array(samples);
+  if (!(amount > 0)) {
+    for (let i = 0; i < samples; i++) curve[i] = (i / (samples - 1)) * 2 - 1;
+    return curve;
+  }
+  const drive = 1 + amount * 20;
+  const norm = Math.tanh(drive);
+  for (let i = 0; i < samples; i++) {
+    const x = (i / (samples - 1)) * 2 - 1;
+    curve[i] = Math.tanh(drive * x) / norm;
+  }
+  return curve;
+}
+
 // Real flute note samples (assets/samples/flute-note-*.mp3, see
 // _loadRealFluteNoteBuffer and CREDITS.md) -- MULTISAMPLED, not one note
 // stretched across the whole range. One recorded C4 pitch-shifted via
@@ -136,17 +166,20 @@ const FLUTE_SAMPLES = [
 ];
 
 // The synthesized "throat voice" -- reaches the register no real flute
-// sample can (see whistleThroatAmount's own comment). THROAT_LOW_REF_HZ is
-// the researched kargyraa floor: sung fundamental is ~70-100Hz, but the
-// defining mechanism is the ventricular folds vibrating at HALF the vocal
-// folds' rate, so the true perceived floor is ~35-50Hz -- 40 is a
-// representative point in that measured range, not an arbitrary round
-// number. THROAT_HARMONICS is the bass drone's own DRONE_HARMONICS recipe
-// (a proven odd-dominant additive stack, already self-described in this
-// file as "clarinet/didgeridoo-ish"), truncated to 8 partials -- the
-// downstream growl formant pair and chamber bank do the real spectral
-// carving, so the full 16-partial richness isn't needed on this source.
-const THROAT_LOW_REF_HZ = 40;
+// sample can (see whistleThroatAmount's own comment). The researched
+// kargyraa floor (sung fundamental ~70-100Hz, but the defining mechanism
+// is the ventricular folds vibrating at HALF the vocal folds' rate, so the
+// true perceived floor is ~35-50Hz) is what originally justified
+// whistleFloorHz's own default (65Hz, see its comment) -- there's no
+// separate lower reference point left to track here now that the pitch
+// fold hard-floors everything there; the crossfade that used to reach for
+// a dedicated sub-floor "kargyraa zone" now shares whistleFloorHz/
+// CeilingHz with growl (see _updateFluteBrightness). THROAT_HARMONICS is
+// the bass drone's own DRONE_HARMONICS recipe (a proven odd-dominant
+// additive stack, already self-described in this file as "clarinet/
+// didgeridoo-ish"), truncated to 8 partials -- the downstream growl
+// formant pair and chamber bank do the real spectral carving, so the full
+// 16-partial richness isn't needed on this source.
 const THROAT_HARMONICS = [
   { n: 1, amp: 1.0, detune: 0 },
   { n: 2, amp: 0.42, detune: 3 },
@@ -203,11 +236,38 @@ export const DEFAULT_DRONE_PARAMS = {
   formantF1Q: 9,
   formantF2Q: 11,
   formantBlendGain: 1.25,
-  moveFilterHz: 260,
+  // "The bass drone's own spectral richness is being filtered out
+  // downstream: moveFilter sits AFTER the formant pair and attenuates the
+  // 570/950Hz formant peaks by ~14-22dB (up to ~36dB at the sweep's
+  // bottom), and partials 12-16 by 10-15dB -- actively working against a
+  // richer/rougher drone, independent of any roughness mechanism." Real
+  // bug, not just a taste call: 260Hz (sweeping down to 120Hz) sat well
+  // below both formants and the upper partials that give the new
+  // saturation/subharmonic below something real to shape. Raised so the
+  // filter's OWN "moving" character survives (still a real sweep, still
+  // audible motion) without gating away the content underneath it.
+  moveFilterHz: 900,
   moveFilterPulsesPerCycle: 48, // shared/bus-wide sweep: one full cycle every N MASTER pulses
-  moveFilterDepthHz: 140,
+  moveFilterDepthHz: 100,
   bassBoostHz: 140,
   bassBoostDb: 9,
+  // "The low frequency drones should be given more didgeridoo-like
+  // qualities -- the rough and shaped overtones." Real gap, not a tuning
+  // problem: neither the drone nor the flute's growl had ANY mechanism
+  // capable of generating new harmonic content (a bandpass EQ bump, growl's
+  // whole previous story, can only emphasize what's already there). Two
+  // real ingredients now, same two-lever pattern as everywhere else in
+  // this file:
+  //   - droneSubharmonicAmount -- a genuine sub-octave oscillator (the
+  //     fundamental/2), the actual vocal-fry/kargyraa mechanism (the
+  //     ventricular folds vibrating at HALF the vocal folds' rate), not an
+  //     invented "sub bass" layer.
+  //   - droneSaturationAmount -- soft-clip (tanh) waveshaping on the
+  //     tonal stack (see buildSaturationCurve), applied BEFORE moveFilter
+  //     so the now-fixed, wider filter above actually shapes the richer
+  //     spectrum instead of deleting it.
+  droneSubharmonicAmount: 0.3,
+  droneSaturationAmount: 0.25,
 
   // Triatonic flute, phase 10 -- REBUILT again, this time on the simpler,
   // well-established pattern real flute-style synth patches actually use:
@@ -291,12 +351,22 @@ export const DEFAULT_DRONE_PARAMS = {
   // actually reads as thin/whistly. See foldIntoRange -- the whole voice
   // (every voicing layer + the throat voice together, so the chord shape
   // survives) folds by octaves into [floor, ceiling] instead. ~65Hz is the
-  // guttural throat-singing floor this file already targets
-  // (THROAT_LOW_REF_HZ's own researched kargyraa range); 523Hz (C5) is the
+  // guttural throat-singing floor this file already targets (the
+  // researched kargyraa range, see THROAT_HARMONICS' own comment); 523Hz
+  // (C5) is the
   // "comfortable male singing range" ceiling from the same design goal --
   // and it sits below the kalimba's own melodic register instead of above it.
   whistleFloorHz: 65,
   whistleCeilingHz: 523,
+  // "RING_OCTAVE_MULTIPLIER no longer differentiates the flute's register
+  // across rings" -- see _fluteTargetHz's own comment for the measured
+  // "why" (the fold's own valid-shift window has ~0.008 octaves of real
+  // slack per octave under default settings -- nowhere near enough for
+  // shift-selection alone to restore audible separation). This is that
+  // fix's own knob: given folds this many octaves LOWER, made this many
+  // HIGHER, before the shared fold/clamp ever runs -- so it can never
+  // push a layer outside whistleFloorHz/CeilingHz either.
+  whistleRingRegisterBias: 0.3,
   whistleGlideMs: 20,
   // A small, fixed spread BETWEEN this ring's own cluster voices (real
   // independent pipes don't land on the exact same cent) -- see
@@ -564,6 +634,12 @@ export const DEFAULT_DRONE_PARAMS = {
   whistleGrowlQ: 3.5, // shared by both bands -- one "how rough" knob, not two
   whistleGrowlWanderHz: 0.2, // free-running "vocalization" wander, NOT pulse-locked
   whistleGrowlWanderDepth: 40, // Hz
+  // Same real fix as the bass drone's own droneSaturationAmount -- growl
+  // used to be ONLY a bandpass EQ bump (a real filter can't generate new
+  // harmonic content), so at even its authored maximum it read as a
+  // +-2.6dB tone-color nudge, not a growl. Soft-clip (tanh) waveshaping on
+  // growl's own two bandpassed bands adds the actual roughness.
+  whistleGrowlSaturationAmount: 0.3,
 
   // Wooden-flute-drone (high register) -- modeled on the bass drone's own
   // voiceLfo/breathPulsesPerCycle: a per-ring LFO breathing the ring's own
@@ -578,8 +654,8 @@ export const DEFAULT_DRONE_PARAMS = {
   // Samples can't cover this -- no real flute (of any family) plays below
   // ~C4 (FLUTE_SAMPLES' own floor), and the kargyraa/throat-singing target
   // register sits nearly TWO OCTAVES below that. This is the synthesized
-  // "throat voice" that takes over there -- see THROAT_LOW_REF_HZ/
-  // THROAT_HARMONICS and _updateFluteBrightness's lowT crossfade.
+  // "throat voice" that takes over there -- see THROAT_HARMONICS and
+  // _updateFluteBrightness's lowT crossfade.
   // amount = the voice itself, modeled on the bass drone's own proven
   // DRONE_HARMONICS additive stack; subharmonicAmount = the real mechanism
   // that actually defines kargyraa -- the ventricular folds vibrating at
@@ -979,8 +1055,29 @@ export class OrphographAudio {
   // transposition-aware live root; the two sites that retune mid-
   // construction (setDroneVoices) pass the raw incoming baseHz explicitly,
   // since _droneBaseHz isn't settled yet at that point.
+  //
+  // "RING_OCTAVE_MULTIPLIER no longer differentiates the flute's register
+  // across rings" -- measured, not assumed: with the default floor/
+  // ceiling/voicing span, the fold's own valid-shift window has only
+  // ~0.008 octaves of real slack out of every octave (the window is
+  // 65-523Hz, ~3.008 octaves; the chord's own 0.5x-2x span is exactly 2
+  // octaves; the difference, 1.008 octaves, is JUST barely over one full
+  // octave -- meaning almost every real target lands on exactly one legal
+  // shift, leaving _fluteFoldFactor's own ring-aware shift-selection
+  // (below) almost nothing to bias between in practice). A shift-selection
+  // rule alone can't fix that; this is the real fix -- a small, continuous
+  // (non-octave) per-ring bias applied HERE, before the fold, so it can
+  // genuinely tip the pre-fold target across a fold boundary rather than
+  // waiting for one to already be open. RING_REGISTER_BIAS_SIGN (given
+  // down, made up, received centered) times whistleRingRegisterBias
+  // (octaves) -- final safety is still `_fluteLayerHz`'s own floor/ceiling
+  // clamp, so this can never push a layer outside the authored range
+  // either.
+  static RING_REGISTER_BIAS_SIGN = { given: -1, received: 0, made: 1 };
   _fluteTargetHz(rootHz = this._effectiveDroneBaseHz()) {
-    return rootHz * RING_OCTAVE_MULTIPLIER[this._whistleLastRing || "received"] * (this._whistleHarmonicByRing || 0);
+    const ring = this._whistleLastRing || "received";
+    const bias = Math.pow(2, (OrphographAudio.RING_REGISTER_BIAS_SIGN[ring] || 0) * (this.droneParams.whistleRingRegisterBias || 0));
+    return rootHz * RING_OCTAVE_MULTIPLIER[ring] * (this._whistleHarmonicByRing || 0) * bias;
   }
 
   // See foldIntoRange/whistleCeilingHz's own comment for the "why." Returns
@@ -997,6 +1094,22 @@ export class OrphographAudio {
   // under the ceiling to fold up into -- with the factory defaults the
   // voicing's own span (4x/2 octaves) fits comfortably inside the
   // floor-ceiling window (65-523Hz is ~8x/3 octaves), so both hold.
+  //
+  // "RING_OCTAVE_MULTIPLIER no longer differentiates the flute's register
+  // across rings at all -- the fold always returns a power-of-2 factor,
+  // collapsing given/received/made to the same octave." Real regression:
+  // RING_OCTAVE_MULTIPLIER's own ratios (0.5/1/2) ARE octave multiples, so
+  // whenever the fold had exactly one valid octave to land on, given and
+  // made's pre-fold targets (an octave apart by construction) folded to
+  // the identical result -- no shift-selection rule can undo that when
+  // there's only one legal shift. What it CAN do: whenever the window
+  // (~3 octaves) has slack beyond what the chord itself needs (~2
+  // octaves) -- genuinely often, since harmonic/transposition move the
+  // pre-fold target continuously -- pick WHERE in that slack to land based
+  // on which ring is actually sounding, rather than an arbitrary fixed
+  // rule blind to ring. given prefers the window's own floor, made its own
+  // ceiling, received the middle -- restoring real register separation
+  // whenever the math allows it, never by relaxing either hard bound.
   _fluteFoldFactor(targetHz, dp = this.droneParams) {
     if (!(targetHz > 0)) return 1;
     const floorHz = dp.whistleFloorHz, ceilingHz = dp.whistleCeilingHz;
@@ -1006,10 +1119,16 @@ export class OrphographAudio {
       .map((v) => v.ratio);
     const maxRatio = activeRatios.length ? Math.max(...activeRatios) : 1;
     const minRatio = activeRatios.length ? Math.min(...activeRatios) : 1;
-    let shift = 0;
-    while (targetHz * maxRatio * Math.pow(2, shift) > ceilingHz && shift > -24) shift--;
-    while (targetHz * minRatio * Math.pow(2, shift) < floorHz &&
-           targetHz * maxRatio * Math.pow(2, shift + 1) <= ceilingHz && shift < 24) shift++;
+    // The ceiling is the hard bound -- the highest shift at which the
+    // topmost sounding layer still fits, clamped to a sane range.
+    const shiftMax = Math.max(-24, Math.min(24, Math.floor(Math.log2(ceilingHz / (targetHz * maxRatio)))));
+    // The floor is honored whenever there's room -- the lowest shift at
+    // which the bottommost sounding layer clears it, but never past
+    // shiftMax (the ceiling always wins if the two disagree).
+    const shiftMinWanted = Math.max(-24, Math.min(24, Math.ceil(Math.log2(floorHz / (targetHz * minRatio)))));
+    const shiftMin = Math.min(shiftMinWanted, shiftMax);
+    const ring = this._whistleLastRing || "received";
+    const shift = ring === "given" ? shiftMin : ring === "made" ? shiftMax : Math.round((shiftMin + shiftMax) / 2);
     return Math.pow(2, shift);
   }
 
@@ -1123,12 +1242,26 @@ export class OrphographAudio {
   // partials entirely.
   _updateFluteBrightness(dv, dp, now) {
     const referencePps = Math.max(0.1, dp.whistleBrightnessReferencePps);
-    // Register reference for the growl/drone-wave crossfade below -- the
-    // REAL span this engine's own sample library covers, not an invented
-    // constant. FLUTE_SAMPLES is authored low-to-high, so the first/last
-    // entries ARE the lowest/highest real recording this engine has.
-    const lowRefHz = FLUTE_SAMPLES[0].baseHz;
-    const highRefHz = FLUTE_SAMPLES[FLUTE_SAMPLES.length - 1].baseHz;
+    // Register reference for the growl/throat/drone-wave crossfade below.
+    // Real bug fixed here: this used to reference FLUTE_SAMPLES' own span
+    // (264.7-900.2Hz) and a separate hardcoded THROAT_LOW_REF_HZ (40Hz) --
+    // both authored BEFORE the pitch-range fold existed, back when the
+    // flute's real pitch could actually reach that whole span. A second,
+    // subtler bug was found MEASURING the first fix: [whistleFloorHz,
+    // whistleCeilingHz] bounds the WHOLE CHORD, not the fundamental this
+    // crossfade actually reads -- since the fold keeps every voicing layer
+    // inside that window as one block, the fundamental (ratio 1) can only
+    // ever reach a narrower sub-range itself: bounded below by needing the
+    // lowest-ratio layer to still clear the floor, above by needing the
+    // highest-ratio layer to still clear the ceiling. Using the chord's
+    // own outer bounds here (rather than the fundamental's real ones)
+    // left t stuck around 0.35-0.65 instead of reaching [0,1] -- measured
+    // directly, not assumed.
+    const activeRatios = (dp.whistleVoicing || []).filter((v) => v.level > 0 && v.ratio > 0).map((v) => v.ratio);
+    const maxRatio = activeRatios.length ? Math.max(...activeRatios) : 1;
+    const minRatio = activeRatios.length ? Math.min(...activeRatios) : 1;
+    const lowRefHz = dp.whistleFloorHz / minRatio;
+    const highRefHz = dp.whistleCeilingHz / maxRatio;
 
     const brightnessMult = Math.min(3, Math.max(0.25,
       1 + dp.whistleBrightnessTempoSensitivity * (this._masterPulsesPerSecond / referencePps - 1)));
@@ -1137,12 +1270,12 @@ export class OrphographAudio {
     this._applyFluteBreathLevel(dv, dp, now);
 
     // "The flute is missing a drone in itself -- didgeridoo at the low
-    // end, wooden-flute-drone at the high end." t=0 at this engine's
-    // lowest real sample, t=1 at its highest, from the voice's own current
-    // pitch (same targetHz every other pitch lookup in this file already
-    // computes). Glides on a slow (0.3s) time constant on purpose -- a
-    // register-character shift is meant to read as "meandering," not a
-    // snap.
+    // end, wooden-flute-drone at the high end." t=0 at the voice's own
+    // authored FLOOR, t=1 at its authored CEILING -- the real reachable
+    // window (see lowRefHz/highRefHz's own comment above), not a stale
+    // sample-library span. Glides on a slow (0.3s) time constant on
+    // purpose -- a register-character shift is meant to read as
+    // "meandering," not a snap.
     if (dv.whistleGrowlF1Gain) {
       const targetHz = this._fluteFundamentalHz();
       const t = targetHz > 0
@@ -1154,13 +1287,15 @@ export class OrphographAudio {
       dv.whistleGrowlF2Gain.gain.setTargetAtTime(growlLevel, now, 0.3);
       dv.whistleDroneWaveDepthGain.gain.setTargetAtTime(dp.whistleDroneWaveDepth * t, now, 0.3);
 
-      // The throat voice's own crossfade -- a SEPARATE zone from growl's
-      // above (growl already reads as near-maximal for anything at/below
-      // the sample floor, which is correct -- vocal-tract coloring
-      // belongs there too). lowT=1 at the researched kargyraa floor
-      // (THROAT_LOW_REF_HZ), 0 at the sample library's own floor (the
-      // same lowRefHz growl already uses) -- the crossfade hands off
-      // exactly where real samples become reliable. ONLY the level
+      // The throat voice's own crossfade -- shares growl's SAME [floor,
+      // ceiling] window now (the old separate below-the-sample-floor
+      // "kargyraa zone" doesn't meaningfully exist anymore now that the
+      // fold hard-floors everything at whistleFloorHz -- there's no room
+      // left below it to reserve a second, lower handoff zone in). Squared
+      // so throat still reads as concentrated at the very bottom specifically
+      // (steeper falloff than growl's own, broader one), reaching its full
+      // authored amount right at the floor -- reachable now, where the old
+      // formula capped it around a third of the way there. ONLY the level
       // targets are set here (a slow, continuous, register-following
       // ceiling) -- pitch is deliberately NOT touched here anymore (see
       // meanderFlute's own throat-voice gate for why: retuning here, every
@@ -1168,10 +1303,7 @@ export class OrphographAudio {
       // sweep on every real hit -- "a weird super-mario-like synth
       // sound").
       if (dv.whistleThroatLevelGain) {
-        const lowT = targetHz > 0
-          ? Math.min(1, Math.max(0,
-              (Math.log2(lowRefHz) - Math.log2(targetHz)) / (Math.log2(lowRefHz) - Math.log2(THROAT_LOW_REF_HZ))))
-          : 0;
+        const lowT = Math.pow(1 - t, 2);
         dv.whistleThroatLevelGain.gain.setTargetAtTime(dp.whistleThroatAmount * lowT, now, 0.3);
         dv.whistleThroatSubGain.gain.setTargetAtTime(dp.whistleThroatSubharmonicAmount * lowT, now, 0.3);
       }
@@ -1214,6 +1346,10 @@ export class OrphographAudio {
       case "moveFilterDepthHz": glide(dv.filterLfoDepth.gain, value); break;
       case "bassBoostHz": glide(dv.bassBoost.frequency, value); break;
       case "bassBoostDb": glide(dv.bassBoost.gain, value); break;
+      case "droneSubharmonicAmount": glide(dv.subGain.gain, value); break;
+      // WaveShaperNode.curve isn't an AudioParam -- rebuilt fresh on
+      // change (see buildSaturationCurve's own comment on why that's fine).
+      case "droneSaturationAmount": dv.droneSaturator.curve = buildSaturationCurve(value); break;
       // All of these feed the _applyFluteLayerLevel formula (several at
       // once, per the coupling comment on that method) -- update the
       // param, then recompute every layer from it, rather than
@@ -1249,6 +1385,13 @@ export class OrphographAudio {
       case "whistleGrowlWanderDepth":
         glide(dv.whistleGrowlWanderDepth1.gain, value);
         glide(dv.whistleGrowlWanderDepth2.gain, value);
+        break;
+      case "whistleGrowlSaturationAmount":
+        // Two separate copies, deliberately -- not sharing one Float32Array
+        // between both nodes' `.curve`, to avoid relying on unspecified
+        // browser behavior around whether that setter copies or aliases.
+        dv.whistleGrowlSaturatorF1.curve = buildSaturationCurve(value);
+        dv.whistleGrowlSaturatorF2.curve = buildSaturationCurve(value);
         break;
       // amount/depth aren't glided directly -- they're the CEILING the
       // register crossfade scales, so re-running the same continuous
@@ -2537,6 +2680,20 @@ export class OrphographAudio {
         return { osc, n: partial.n };
       });
 
+      // "The rough and shaped overtones" -- see droneSubharmonicAmount's
+      // own comment (DEFAULT_DRONE_PARAMS). A real sub-octave partial,
+      // summed into the SAME ringGain the 16 harmonic partials use, so it
+      // rides the same breath swell and passes through the same
+      // saturator below -- not a separate, independently-controlled layer.
+      const sub = ctx.createOscillator();
+      sub.type = "sine";
+      sub.frequency.value = baseHz / 2;
+      const subGain = ctx.createGain();
+      subGain.gain.value = dp.droneSubharmonicAmount;
+      sub.connect(subGain);
+      subGain.connect(ringGain);
+      sub.start();
+
       // Breathing -- one shared LFO now, off the MASTER pulse rate (see
       // this method's own header comment) rather than any one ring's own
       // 6:8:12-scaled rate; see setProcessionPulseRate for the live update
@@ -2558,9 +2715,22 @@ export class OrphographAudio {
       vibratoDepth.gain.value = dp.vibratoCents;
       vibratoLfo.connect(vibratoDepth);
       oscs.forEach((p) => vibratoDepth.connect(p.osc.detune));
+      vibratoDepth.connect(sub.detune);
       vibratoLfo.start();
 
-      ringGain.connect(bus);
+      // Soft-clip (tanh) waveshaping on the whole tonal stack (16 partials
+      // + subharmonic together) -- see buildSaturationCurve/
+      // droneSaturationAmount. Sits BEFORE the formant pair and moveFilter
+      // below (both now retuned to actually pass this content through, see
+      // moveFilterHz's own comment), so the added harmonics get shaped by
+      // the rest of the chain instead of arriving after it. The breath/
+      // buzz noise layer (below) connects straight to `bus`, bypassing
+      // this -- it's texture, not part of the tone being roughened.
+      const droneSaturator = ctx.createWaveShaper();
+      droneSaturator.oversample = "4x";
+      droneSaturator.curve = buildSaturationCurve(dp.droneSaturationAmount);
+      ringGain.connect(droneSaturator);
+      droneSaturator.connect(bus);
 
       // Breath/buzz layer -- didgeridoo tone is never a clean pitch; it's
       // breathy and buzzy from the player's embouchure. Filtered noise,
@@ -2769,24 +2939,39 @@ export class OrphographAudio {
       // chamber above) and are register-scaled continuously by
       // _updateFluteBrightness -- the gain values set here (0) are just
       // the pre-first-tick starting point.
+      // "Growl is already at 100% ceiling always, but at full strength it
+      // is only a +2.6dB parallel bandpass bump -- an EQ tilt, not a
+      // growl." Real fix: soft-clip (tanh) waveshaping ON the bandpassed
+      // content itself, before it sums into the gain that scales how much
+      // of it is present -- see whistleGrowlSaturationAmount/
+      // buildSaturationCurve. One saturator per band, same reasoning as
+      // the bass drone's own (see droneSaturationAmount).
       const whistleGrowlF1 = ctx.createBiquadFilter();
       whistleGrowlF1.type = "bandpass";
       whistleGrowlF1.frequency.value = dp.whistleGrowlF1Hz;
       whistleGrowlF1.Q.value = dp.whistleGrowlQ;
+      const whistleGrowlSaturatorF1 = ctx.createWaveShaper();
+      whistleGrowlSaturatorF1.oversample = "4x";
+      whistleGrowlSaturatorF1.curve = buildSaturationCurve(dp.whistleGrowlSaturationAmount);
       const whistleGrowlF1Gain = ctx.createGain();
       whistleGrowlF1Gain.gain.value = 0;
       whistleMuteGain.connect(whistleGrowlF1);
-      whistleGrowlF1.connect(whistleGrowlF1Gain);
+      whistleGrowlF1.connect(whistleGrowlSaturatorF1);
+      whistleGrowlSaturatorF1.connect(whistleGrowlF1Gain);
       whistleGrowlF1Gain.connect(whistleChamberBank.input);
 
       const whistleGrowlF2 = ctx.createBiquadFilter();
       whistleGrowlF2.type = "bandpass";
       whistleGrowlF2.frequency.value = dp.whistleGrowlF2Hz;
       whistleGrowlF2.Q.value = dp.whistleGrowlQ;
+      const whistleGrowlSaturatorF2 = ctx.createWaveShaper();
+      whistleGrowlSaturatorF2.oversample = "4x";
+      whistleGrowlSaturatorF2.curve = buildSaturationCurve(dp.whistleGrowlSaturationAmount);
       const whistleGrowlF2Gain = ctx.createGain();
       whistleGrowlF2Gain.gain.value = 0;
       whistleMuteGain.connect(whistleGrowlF2);
-      whistleGrowlF2.connect(whistleGrowlF2Gain);
+      whistleGrowlF2.connect(whistleGrowlSaturatorF2);
+      whistleGrowlSaturatorF2.connect(whistleGrowlF2Gain);
       whistleGrowlF2Gain.connect(whistleChamberBank.input);
 
       // Free-running "vocalization" wander -- NOT pulse-locked, unlike
@@ -2906,13 +3091,14 @@ export class OrphographAudio {
       this._whistleHarmonicByRing = dp.whistleHarmonic;
 
       this.droneVoices = {
-        bus, oscs, ringGain,
+        bus, oscs, ringGain, sub, subGain, droneSaturator,
         voiceLfo, voiceLfoDepth, vibratoLfo, vibratoDepth,
         noiseSources, noiseGain, f1, f2, formantBlend, moveFilter, filterLfo, filterLfoDepth, bassBoost,
         whistleLayers, whistleVibratoLfo, wanderLowpass,
         whistleSharedNoise, breathShape, whistleBreathWander, whistleBreathColorFilter, whistleBreathGain,
         whistleSurgeGain, whistleMuteGain, whistleChamberBank, whistleBus, whistleBox,
         whistleGrowlF1, whistleGrowlF2, whistleGrowlF1Gain, whistleGrowlF2Gain,
+        whistleGrowlSaturatorF1, whistleGrowlSaturatorF2,
         whistleGrowlWanderLfo1, whistleGrowlWanderLfo2, whistleGrowlWanderDepth1, whistleGrowlWanderDepth2,
         whistleDroneWaveLfo, whistleDroneWaveDepthGain,
         whistleThroatOscs, whistleThroatLevelGain, whistleThroatSubOsc, whistleThroatSubGain, whistleThroatGateGain,
@@ -2923,6 +3109,7 @@ export class OrphographAudio {
       this.droneVoices.bus.gain.cancelScheduledValues(now);
       this.droneVoices.bus.gain.linearRampToValueAtTime(0, now + 0.8);
       this.droneVoices.oscs.forEach((p) => p.osc.stop(now + 0.85));
+      this.droneVoices.sub.stop(now + 0.85);
       this.droneVoices.voiceLfo.stop(now + 0.85);
       this.droneVoices.vibratoLfo.stop(now + 0.85);
       this.droneVoices.noiseSources.forEach((n) => n.stop(now + 0.85));
@@ -2941,6 +3128,7 @@ export class OrphographAudio {
       this.droneVoices.oscs.forEach((p) => {
         p.osc.frequency.setTargetAtTime(baseHz * p.n, now, 0.08);
       });
+      this.droneVoices.sub.frequency.setTargetAtTime(baseHz / 2, now, 0.08);
       // Flute -- same construction-time formula (RING_OCTAVE_MULTIPLIER's
       // center register, harmonic scalar), retuned to the new root.
       const whistleTarget = this._fluteFundamentalHz(baseHz);
