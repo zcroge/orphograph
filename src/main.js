@@ -797,11 +797,32 @@ const sequencer = new Sequencer({
     soundingEntries.forEach((entry) => {
       velocityBySpoke.set(entry.spoke, Math.max(velocityBySpoke.get(entry.spoke) || 0, entryVelocity(entry)));
     });
-    [...velocityBySpoke.entries()].forEach(([spoke, velocity], i) => {
-      setTimeout(() => {
-        audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: durationSec, velocity, ring });
-      }, i * 20);
-    });
+    if (ringPerformanceMode[ring] === "arpeggio") {
+      // Arpeggiate -- the SAME content and timing budget as chord pluck
+      // (velocityBySpoke, durationSec), just spread across it as a real
+      // ordered sequence instead of a near-simultaneous strum. slotMs
+      // subdivides the word's own already-derived arc-timing budget
+      // evenly -- no new arbitrary rate. Each note's own duration runs a
+      // little past its slot so notes ring into each other slightly, the
+      // way a real plucked-tine arpeggio naturally overlaps, rather than
+      // each one cutting the next off exactly at the slot boundary.
+      const ordered = orderArpeggioEntries([...velocityBySpoke.entries()], word, arpeggioDirection[ring]);
+      const slotSec = durationSec / ordered.length;
+      ordered.forEach(([spoke, velocity], i) => {
+        setTimeout(() => {
+          audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: Math.min(1.2, slotSec * 1.6), velocity, ring });
+        }, i * slotSec * 1000);
+      });
+    } else {
+      // Chord pluck (and the safe default for any other value) -- a
+      // small strum stagger between notes rather than a perfectly
+      // simultaneous trigger, closer to how a real strum sounds.
+      [...velocityBySpoke.entries()].forEach(([spoke, velocity], i) => {
+        setTimeout(() => {
+          audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: durationSec, velocity, ring });
+        }, i * 20);
+      });
+    }
     if (soundingEntries.length) {
       applyVowelFromLetters(soundingEntries.map((e) => e.letter));
       soundingEntries.forEach((e) => {
@@ -1313,6 +1334,36 @@ function wordPitchClasses(word) {
   return spokes;
 }
 
+// The arpeggiator promised above -- orders onChordHit's own already-
+// computed `velocityBySpoke` entries (tier-gated, deduped, first-
+// occurrence) into a real timed sequence instead of a near-simultaneous
+// strum. `entries` is `[...velocityBySpoke.entries()]` (each `[spoke,
+// velocity]`); sorting is by each pitch class's own ACTUAL played Hz,
+// which for one fixed ring/tonic is just its raw transposed spoke number
+// -- hzForSpoke (letters.js) is strictly increasing over spokes 1-12, so
+// no arc-distance math is needed here (that's the flute voicing engine's
+// own concern, not this one). "auto" reuses wordHandedness -- the SAME
+// clockwise/counter-clockwise lean already driving sweep direction
+// elsewhere -- so a word's own geometry picks ascending vs descending
+// without a manual choice, unless overridden.
+function orderArpeggioEntries(entries, word, direction) {
+  const byPitch = (a, b) => transposedSpoke(a[0]) - transposedSpoke(b[0]);
+  const ascending = () => [...entries].sort(byPitch);
+  const descending = () => ascending().reverse();
+  switch (direction === "auto" ? (wordHandedness(word) === 1 ? "ascending" : "descending") : direction) {
+    case "ascending": return ascending();
+    case "descending": return descending();
+    case "upDown": {
+      const up = ascending();
+      const down = descending();
+      return [...up, ...down.slice(1, -1)];
+    }
+    case "asTyped":
+    default:
+      return entries;
+  }
+}
+
 // Named vocal-register presets (whistleHarmonicMin/Max) retired along with
 // the harmonic-sweep pitch model they tuned -- see the native chord-voicing
 // engine plan. setSliderValue survives; other callers still use it
@@ -1587,10 +1638,36 @@ $("import-settings-file").addEventListener("change", async (e) => {
 // meandering flute narrative" means there's only one instance of each to
 // mute/level now, already covered by the drone on/off button and
 // flute-solo. "Which ring" no longer maps to a separately audible thing.
+// Kalimba performance modes -- "arpeggiate, chord pluck, or follow pure
+// melody," per ring. `melody` and `chordPluck` are the SAME two
+// sequencer.js timing modes this always had (spoke-matched per-letter vs.
+// arc-timed per-word); `arpeggio` reuses chord timing too (the SAME
+// word/arc-derived event, see onChordHit) but renders it as an ordered,
+// spaced-out sequence instead of a near-simultaneous strum -- see
+// orderArpeggioEntries above. Kept as one small mapping here rather than
+// a third sequencer.js mode string, so sequencer.js's own dispatch never
+// has to know this distinction exists.
+const ringPerformanceMode = { given: "melody", received: "melody", made: "melody" };
+const arpeggioDirection = { given: "auto", received: "auto", made: "auto" };
+function applyRingPerformanceMode(ring, mode) {
+  ringPerformanceMode[ring] = mode;
+  sequencer.setRingMode(ring, mode === "melody" ? "melody" : "chord");
+  // The direction lever only means anything in arpeggio mode -- disabled
+  // otherwise, same "grey out what wouldn't do anything" pattern
+  // applyWhistleFollow already uses for the manual pitch slider.
+  $(`arpeggio-direction-${ring}`).disabled = mode !== "arpeggio";
+}
+function applyArpeggioDirection(ring, direction) {
+  arpeggioDirection[ring] = direction;
+}
 ["given", "received", "made"].forEach((ring) => {
-  const select = $(`mode-${ring}`);
-  sequencer.setRingMode(ring, select.value);
-  select.addEventListener("change", (e) => sequencer.setRingMode(ring, e.target.value));
+  const modeSelect = $(`mode-${ring}`);
+  applyRingPerformanceMode(ring, modeSelect.value);
+  modeSelect.addEventListener("change", (e) => applyRingPerformanceMode(ring, e.target.value));
+
+  const directionSelect = $(`arpeggio-direction-${ring}`);
+  applyArpeggioDirection(ring, directionSelect.value);
+  directionSelect.addEventListener("change", (e) => applyArpeggioDirection(ring, e.target.value));
 });
 
 // Native chord voicing -- each word's own real letters drive the shared

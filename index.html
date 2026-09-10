@@ -65,15 +65,27 @@
         <label class="inline">step (spokes)<input type="number" id="transposition-step" min="1" max="11" step="1" value="7" style="width: 48px;" /></label>
       </div>
 
-      <div class="row ring-modes advanced-only">
+      <div class="row ring-modes advanced-only" title="Kalimba performance mode, per ring -- melody (one note per real letter-hit), chord pluck (a word's own letters struck together, near-simultaneous strum), or arpeggiate (that same word, spaced out into a real timed sequence -- see the direction lever below).">
         <label class="inline">given
-          <select id="mode-given"><option value="melody">melody</option><option value="chord">chord</option></select>
+          <select id="mode-given"><option value="melody">melody</option><option value="chordPluck">chord pluck</option><option value="arpeggio">arpeggiate</option></select>
         </label>
         <label class="inline">received
-          <select id="mode-received"><option value="melody">melody</option><option value="chord">chord</option></select>
+          <select id="mode-received"><option value="melody">melody</option><option value="chordPluck">chord pluck</option><option value="arpeggio">arpeggiate</option></select>
         </label>
         <label class="inline">made
-          <select id="mode-made"><option value="melody">melody</option><option value="chord">chord</option></select>
+          <select id="mode-made"><option value="melody">melody</option><option value="chordPluck">chord pluck</option><option value="arpeggio">arpeggiate</option></select>
+        </label>
+      </div>
+
+      <div class="row ring-modes advanced-only" title="Arpeggio direction, per ring -- only audible while that ring's own mode above is 'arpeggiate' (disabled otherwise). Auto follows the word's own clockwise/counter-clockwise lean (the same wordHandedness driving sweep direction elsewhere) -- ascending for a clockwise-leaning word, descending for counter-clockwise. As-typed plays the word's own letters in first-occurrence order, unsorted; up-down ascends then descends back down.">
+        <label class="inline">given dir.
+          <select id="arpeggio-direction-given" disabled><option value="auto">auto (word handedness)</option><option value="asTyped">as typed</option><option value="ascending">ascending</option><option value="descending">descending</option><option value="upDown">up-down</option></select>
+        </label>
+        <label class="inline">received dir.
+          <select id="arpeggio-direction-received" disabled><option value="auto">auto (word handedness)</option><option value="asTyped">as typed</option><option value="ascending">ascending</option><option value="descending">descending</option><option value="upDown">up-down</option></select>
+        </label>
+        <label class="inline">made dir.
+          <select id="arpeggio-direction-made" disabled><option value="auto">auto (word handedness)</option><option value="asTyped">as typed</option><option value="ascending">ascending</option><option value="descending">descending</option><option value="upDown">up-down</option></select>
         </label>
       </div>
 
