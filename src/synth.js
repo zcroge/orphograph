@@ -219,6 +219,42 @@ export const DEFAULT_NOTE_PARAMS = {
   ceilingHz: 831,
 };
 
+// The resultant-rhythm engine's own kick/snare/hat recipe -- previously
+// inline literals in playPercussionHit's own three branches, promoted
+// into a real params object (same "factory default reconstructable, live-
+// tunable" treatment DEFAULT_NOTE_PARAMS already got) so timbre can be
+// authored as named kits (see main.js's PERCUSSION_KIT_PRESETS) instead
+// of a single hardcoded recipe. Values below reproduce that exact recipe
+// -- the "Acoustic" kit -- so this promotion changes nothing on its own.
+export const DEFAULT_PERCUSSION_PARAMS = {
+  // given (slowest ring) = kick: a sine sweeping down fast plus a brief
+  // lowpassed noise click for the beater attack.
+  kickFreqStart: 150,
+  kickFreqEnd: 50,
+  kickSweepMs: 40,
+  kickGain: 1.4,
+  kickDecayMs: 220,
+  kickClickGain: 0.6,
+  kickClickLowpassHz: 1400,
+  kickClickDecayMs: 15,
+  // received (middle ring) = snare: two detuned tone oscillators for
+  // body, plus bandpassed noise for the rattle.
+  snareToneHz1: 180,
+  snareToneHz2: 330,
+  snareToneGain1: 0.5,
+  snareToneGain2: 0.35,
+  snareToneDecayMs: 90,
+  snareNoiseBandHz: 1800,
+  snareNoiseQ: 0.8,
+  snareNoiseGain: 0.55,
+  snareNoiseDecayMs: 90,
+  // made (fastest ring) = hat: a short, high, fast-decaying highpassed
+  // noise burst.
+  hatHighpassHz: 6000,
+  hatGain: 0.35,
+  hatDecayMs: 30,
+};
+
 // Every knob the drone's voice touches -- "all the levers," not just the
 // ones already fought over. Grouped in the UI (index.html) but flat here:
 // levels (just busGain now -- givenGain/receivedGain/madeGain retired
@@ -965,6 +1001,12 @@ export class OrphographAudio {
     // mallet/pluck noise transient instead of harsh oscillator content.
     this.noteParams = { ...DEFAULT_NOTE_PARAMS };
 
+    // Percussion-timbre parameters, live-adjustable via setPercussionParam
+    // -- same treatment as noteParams above, promoted out of
+    // playPercussionHit's own former inline literals so a "kit" is a data
+    // edit (see main.js's PERCUSSION_KIT_PRESETS), not a code change.
+    this.percussionParams = { ...DEFAULT_PERCUSSION_PARAMS };
+
     // Drone-timbre parameters -- same "read-write, not read-only" deal as
     // noteParams, but the drone is a long-lived running graph rather than a
     // one-shot note, so setDroneParam (below) also pushes changes into the
@@ -1043,6 +1085,10 @@ export class OrphographAudio {
 
   setNoteParam(key, value) {
     if (this.noteParams && key in this.noteParams) this.noteParams[key] = value;
+  }
+
+  setPercussionParam(key, value) {
+    if (this.percussionParams && key in this.percussionParams) this.percussionParams[key] = value;
   }
 
   // The ONE place the flute's un-folded register formula lives -- every
@@ -2423,16 +2469,24 @@ export class OrphographAudio {
   // "a real percussion hit happened here" from "this ring's sweep merely
   // passed a beat the density arc chose to skip," rather than firing a
   // visual for every call regardless of whether anything was heard.
-  playPercussionHit(ring, { accent = false } = {}) {
-    if (!accent) {
+  // `gainMultiplier` -- a roll/flam grace-note echo (see main.js's
+  // triggerPercussion): like `accent`, it bypasses the density gate (an
+  // echo embellishes an already-decided real hit, it isn't a new
+  // independent resultant-rhythm event to separately thin), but sets the
+  // boost directly instead of accent's fixed 1.6x. Normal calls
+  // (`accent=false, gainMultiplier=null`) are the exact density-gated
+  // path this always had.
+  playPercussionHit(ring, { accent = false, gainMultiplier = null } = {}) {
+    if (!accent && gainMultiplier === null) {
       const acc = this._percussionDensityAccumulator;
       acc[ring] += this._percussionDensity;
       if (acc[ring] < 1) return false;
       acc[ring] -= 1;
     }
-    const boost = accent ? 1.6 : 1;
+    const boost = accent ? 1.6 : (gainMultiplier !== null ? gainMultiplier : 1);
     const ctx = this.ensureContext();
     const t0 = ctx.currentTime;
+    const pp = this.percussionParams;
 
     if (ring === "given") {
       // Kick -- a sine sweeping down fast (150Hz -> 50Hz over ~40ms, the
@@ -2445,15 +2499,15 @@ export class OrphographAudio {
       // ~1.13 aggregate bus level instead of sitting under it.
       const osc = ctx.createOscillator();
       osc.type = "sine";
-      osc.frequency.setValueAtTime(150, t0);
-      osc.frequency.exponentialRampToValueAtTime(50, t0 + 0.04);
+      osc.frequency.setValueAtTime(pp.kickFreqStart, t0);
+      osc.frequency.exponentialRampToValueAtTime(pp.kickFreqEnd, t0 + pp.kickSweepMs / 1000);
       const oscGain = ctx.createGain();
-      oscGain.gain.setValueAtTime(1.4 * boost, t0);
-      oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
+      oscGain.gain.setValueAtTime(pp.kickGain * boost, t0);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + pp.kickDecayMs / 1000);
       osc.connect(oscGain);
       oscGain.connect(this._percussionGate);
       osc.start(t0);
-      osc.stop(t0 + 0.25);
+      osc.stop(t0 + pp.kickDecayMs / 1000 + 0.03);
 
       // The click is the part most likely to actually cut through --
       // outside the masked sub-140Hz band. Raised and opened a little
@@ -2463,46 +2517,46 @@ export class OrphographAudio {
       click.buffer = this._noiseBuffer();
       const clickFilter = ctx.createBiquadFilter();
       clickFilter.type = "lowpass";
-      clickFilter.frequency.value = 1400;
+      clickFilter.frequency.value = pp.kickClickLowpassHz;
       const clickGain = ctx.createGain();
-      clickGain.gain.setValueAtTime(0.6 * boost, t0);
-      clickGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.015);
+      clickGain.gain.setValueAtTime(pp.kickClickGain * boost, t0);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, t0 + pp.kickClickDecayMs / 1000);
       click.connect(clickFilter);
       clickFilter.connect(clickGain);
       clickGain.connect(this._percussionGate);
       click.start(t0);
-      click.stop(t0 + 0.02);
+      click.stop(t0 + pp.kickClickDecayMs / 1000 + 0.005);
     } else if (ring === "received") {
       // Snare -- the classic drum-machine recipe: two detuned tone
       // oscillators for body, plus bandpassed noise for the rattle. Less
       // contested than the kick's own band (see given, above) -- raised
       // proportionately, not as drastically.
-      [180, 330].forEach((hz, i) => {
+      [[pp.snareToneHz1, pp.snareToneGain1], [pp.snareToneHz2, pp.snareToneGain2]].forEach(([hz, gain]) => {
         const osc = ctx.createOscillator();
         osc.type = "triangle";
         osc.frequency.value = hz;
         const oscGain = ctx.createGain();
-        oscGain.gain.setValueAtTime((i === 0 ? 0.5 : 0.35) * boost, t0);
-        oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+        oscGain.gain.setValueAtTime(gain * boost, t0);
+        oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + pp.snareToneDecayMs / 1000);
         osc.connect(oscGain);
         oscGain.connect(this._percussionGate);
         osc.start(t0);
-        osc.stop(t0 + 0.1);
+        osc.stop(t0 + pp.snareToneDecayMs / 1000 + 0.01);
       });
       const noise = ctx.createBufferSource();
       noise.buffer = this._noiseBuffer();
       const noiseFilter = ctx.createBiquadFilter();
       noiseFilter.type = "bandpass";
-      noiseFilter.frequency.value = 1800;
-      noiseFilter.Q.value = 0.8;
+      noiseFilter.frequency.value = pp.snareNoiseBandHz;
+      noiseFilter.Q.value = pp.snareNoiseQ;
       const noiseGain = ctx.createGain();
-      noiseGain.gain.setValueAtTime(0.55 * boost, t0);
-      noiseGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+      noiseGain.gain.setValueAtTime(pp.snareNoiseGain * boost, t0);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, t0 + pp.snareNoiseDecayMs / 1000);
       noise.connect(noiseFilter);
       noiseFilter.connect(noiseGain);
       noiseGain.connect(this._percussionGate);
       noise.start(t0);
-      noise.stop(t0 + 0.1);
+      noise.stop(t0 + pp.snareNoiseDecayMs / 1000 + 0.01);
     } else {
       // Hat -- a short, high, fast-decaying highpassed noise burst. Least
       // contested band of the three (well above the drone's own harmonic
@@ -2511,15 +2565,15 @@ export class OrphographAudio {
       noise.buffer = this._noiseBuffer();
       const filter2 = ctx.createBiquadFilter();
       filter2.type = "highpass";
-      filter2.frequency.value = 6000;
+      filter2.frequency.value = pp.hatHighpassHz;
       const gain2 = ctx.createGain();
-      gain2.gain.setValueAtTime(0.35 * boost, t0);
-      gain2.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.03);
+      gain2.gain.setValueAtTime(pp.hatGain * boost, t0);
+      gain2.gain.exponentialRampToValueAtTime(0.0001, t0 + pp.hatDecayMs / 1000);
       noise.connect(filter2);
       filter2.connect(gain2);
       gain2.connect(this._percussionGate);
       noise.start(t0);
-      noise.stop(t0 + 0.04);
+      noise.stop(t0 + pp.hatDecayMs / 1000 + 0.01);
     }
     return true;
   }

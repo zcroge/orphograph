@@ -107,6 +107,15 @@
         <input id="percussion-level" type="range" min="0" max="1" step="0.01" value="1" />
       </label>
 
+      <div class="row advanced-only" title="Percussion kit and pattern -- see the full percussion timbre panel below for every individual slider.">
+        <label class="inline">kit
+          <select id="percussion-kit-preset"><option value="">(custom)</option><option value="acoustic" selected>Acoustic</option><option value="electronic">Electronic</option><option value="frameDrum">Frame drum</option><option value="industrial">Industrial</option></select>
+        </label>
+        <label class="inline" title="Resultant (default): one event per real geometric hit, ebbing and flowing with the density arc -- unchanged. Sparse: only THIS ring's own tier-owned hits sound (skip passed ones) -- quieter, cleaner, for contemplative use. Roll: a hit that actually sounds adds a quick flam of quieter echo-hits, timed to this ring's own current pulse -- denser, for an intense groovy jam.">pattern
+          <select id="percussion-pattern-mode"><option value="resultant" selected>resultant</option><option value="sparse">sparse</option><option value="roll">roll</option></select>
+        </label>
+      </div>
+
       <div class="row advanced-only">
         <button id="connect-midi">connect MIDI (MPK25)</button>
         <span id="midi-status" class="status">not connected</span>
@@ -127,7 +136,7 @@
           <label>body resonance (Hz)<span class="rw"><input type="range" id="np-bodyHz" min="100" max="1500" value="210" step="5" /><input type="number" id="np-bodyHz-n" min="100" max="1500" value="210" step="5" /></span></label>
           <label>body resonance Q<span class="rw"><input type="range" id="np-bodyQ" min="0.5" max="10" value="6.1" step="0.1" /><input type="number" id="np-bodyQ-n" min="0.5" max="10" value="6.1" step="0.1" /></span></label>
           <label>body resonance amount (dB)<span class="rw"><input type="range" id="np-bodyAmountDb" min="0" max="20" value="16" step="0.5" /><input type="number" id="np-bodyAmountDb-n" min="0" max="20" value="16" step="0.5" /></span></label>
-          <label>pluck/mallet amount<span class="rw"><input type="range" id="np-pluckAmount" min="0" max="1" value="0.82" step="0.02" /><input type="number" id="np-pluckAmount-n" min="0" max="1" value="0.82" step="0.02" /></span></label>
+          <label>pluck/mallet amount<span class="rw"><input type="range" id="np-pluckAmount" min="0" max="1" value="0.82" step="0.01" /><input type="number" id="np-pluckAmount-n" min="0" max="1" value="0.82" step="0.01" /></span></label>
           <label>pluck/mallet length (ms)<span class="rw"><input type="range" id="np-pluckMs" min="1" max="80" value="80" step="1" /><input type="number" id="np-pluckMs-n" min="1" max="80" value="80" step="1" /></span></label>
           <label title="This instrument's own authored register -- a real pitch below this folds UP an octave into range, one above folds DOWN, rather than clamping flat onto the boundary note (pitch class/contour survive, only the register moves). Defaults to this voice's real current span, so factory default changes nothing.">range floor (Hz)<span class="rw"><input type="range" id="np-floorHz" min="40" max="600" value="110" step="1" /><input type="number" id="np-floorHz-n" min="40" max="600" value="110" step="1" /></span></label>
           <label>range ceiling (Hz)<span class="rw"><input type="range" id="np-ceilingHz" min="200" max="4000" value="831" step="1" /><input type="number" id="np-ceilingHz-n" min="200" max="4000" value="831" step="1" /></span></label>
@@ -235,6 +244,43 @@
       </details>
 
       <details class="timbre-panel advanced-only">
+        <summary>percussion timbre (resultant-rhythm kick/snare/hat -- given=kick, received=snare, made=hat) -- every lever the kit touches, tune by ear</summary>
+        <div class="row timbre-presets">
+          <select id="percussion-preset-select"><option value="">(unsaved)</option></select>
+          <button id="percussion-preset-save">save as...</button>
+          <button id="percussion-preset-delete">delete</button>
+          <button id="percussion-preset-reset">factory default</button>
+        </div>
+        <div class="timbre-grid">
+          <div class="timbre-group-label">kick (given)</div>
+          <label>sweep start (Hz)<span class="rw"><input type="range" id="pp-kickFreqStart" min="50" max="400" value="150" step="1" /><input type="number" id="pp-kickFreqStart-n" min="50" max="400" value="150" step="1" /></span></label>
+          <label>sweep end (Hz)<span class="rw"><input type="range" id="pp-kickFreqEnd" min="20" max="150" value="50" step="1" /><input type="number" id="pp-kickFreqEnd-n" min="20" max="150" value="50" step="1" /></span></label>
+          <label>sweep time (ms)<span class="rw"><input type="range" id="pp-kickSweepMs" min="5" max="150" value="40" step="1" /><input type="number" id="pp-kickSweepMs-n" min="5" max="150" value="40" step="1" /></span></label>
+          <label>thump level<span class="rw"><input type="range" id="pp-kickGain" min="0" max="3" value="1.4" step="0.05" /><input type="number" id="pp-kickGain-n" min="0" max="3" value="1.4" step="0.05" /></span></label>
+          <label>thump decay (ms)<span class="rw"><input type="range" id="pp-kickDecayMs" min="20" max="500" value="220" step="5" /><input type="number" id="pp-kickDecayMs-n" min="20" max="500" value="220" step="5" /></span></label>
+          <label>beater click level<span class="rw"><input type="range" id="pp-kickClickGain" min="0" max="1.5" value="0.6" step="0.01" /><input type="number" id="pp-kickClickGain-n" min="0" max="1.5" value="0.6" step="0.01" /></span></label>
+          <label>beater click tone (Hz)<span class="rw"><input type="range" id="pp-kickClickLowpassHz" min="200" max="4000" value="1400" step="50" /><input type="number" id="pp-kickClickLowpassHz-n" min="200" max="4000" value="1400" step="50" /></span></label>
+          <label>beater click decay (ms)<span class="rw"><input type="range" id="pp-kickClickDecayMs" min="2" max="60" value="15" step="1" /><input type="number" id="pp-kickClickDecayMs-n" min="2" max="60" value="15" step="1" /></span></label>
+
+          <div class="timbre-group-label">snare (received)</div>
+          <label>tone 1 (Hz)<span class="rw"><input type="range" id="pp-snareToneHz1" min="50" max="400" value="180" step="1" /><input type="number" id="pp-snareToneHz1-n" min="50" max="400" value="180" step="1" /></span></label>
+          <label>tone 2 (Hz)<span class="rw"><input type="range" id="pp-snareToneHz2" min="100" max="700" value="330" step="1" /><input type="number" id="pp-snareToneHz2-n" min="100" max="700" value="330" step="1" /></span></label>
+          <label>tone 1 level<span class="rw"><input type="range" id="pp-snareToneGain1" min="0" max="1.5" value="0.5" step="0.01" /><input type="number" id="pp-snareToneGain1-n" min="0" max="1.5" value="0.5" step="0.01" /></span></label>
+          <label>tone 2 level<span class="rw"><input type="range" id="pp-snareToneGain2" min="0" max="1.5" value="0.35" step="0.01" /><input type="number" id="pp-snareToneGain2-n" min="0" max="1.5" value="0.35" step="0.01" /></span></label>
+          <label>tone decay (ms)<span class="rw"><input type="range" id="pp-snareToneDecayMs" min="10" max="300" value="90" step="5" /><input type="number" id="pp-snareToneDecayMs-n" min="10" max="300" value="90" step="5" /></span></label>
+          <label>rattle band (Hz)<span class="rw"><input type="range" id="pp-snareNoiseBandHz" min="300" max="4000" value="1800" step="50" /><input type="number" id="pp-snareNoiseBandHz-n" min="300" max="4000" value="1800" step="50" /></span></label>
+          <label>rattle resonance (Q)<span class="rw"><input type="range" id="pp-snareNoiseQ" min="0.1" max="3" value="0.8" step="0.05" /><input type="number" id="pp-snareNoiseQ-n" min="0.1" max="3" value="0.8" step="0.05" /></span></label>
+          <label>rattle level<span class="rw"><input type="range" id="pp-snareNoiseGain" min="0" max="1.5" value="0.55" step="0.01" /><input type="number" id="pp-snareNoiseGain-n" min="0" max="1.5" value="0.55" step="0.01" /></span></label>
+          <label>rattle decay (ms)<span class="rw"><input type="range" id="pp-snareNoiseDecayMs" min="10" max="300" value="90" step="5" /><input type="number" id="pp-snareNoiseDecayMs-n" min="10" max="300" value="90" step="5" /></span></label>
+
+          <div class="timbre-group-label">hat (made)</div>
+          <label>tone (Hz, highpass)<span class="rw"><input type="range" id="pp-hatHighpassHz" min="1000" max="12000" value="6000" step="100" /><input type="number" id="pp-hatHighpassHz-n" min="1000" max="12000" value="6000" step="100" /></span></label>
+          <label>level<span class="rw"><input type="range" id="pp-hatGain" min="0" max="1" value="0.35" step="0.01" /><input type="number" id="pp-hatGain-n" min="0" max="1" value="0.35" step="0.01" /></span></label>
+          <label>decay (ms)<span class="rw"><input type="range" id="pp-hatDecayMs" min="5" max="150" value="30" step="1" /><input type="number" id="pp-hatDecayMs-n" min="5" max="150" value="30" step="1" /></span></label>
+        </div>
+      </details>
+
+      <details class="timbre-panel advanced-only">
         <summary>trace/echo visuals (the standing echo tunnel, propagating hit/burst echoes, and the master-hull echo) -- tune by eye</summary>
         <div class="row timbre-presets">
           <select id="view-preset-select"><option value="">(unsaved)</option></select>
@@ -249,7 +295,7 @@
           <label title="radial reach per depth unit -- how far each generation travels per step">reach per step<span class="rw"><input type="range" id="vp-standingStep" min="0.05" max="0.5" value="0.19" step="0.01" /><input type="number" id="vp-standingStep-n" min="0.05" max="0.5" value="0.19" step="0.01" /></span></label>
           <label title="exponential fade rate -- lower = longer, more gradual fade to black">fade rate<span class="rw"><input type="range" id="vp-standingFadeRate" min="0.02" max="0.6" value="0.53" step="0.01" /><input type="number" id="vp-standingFadeRate-n" min="0.02" max="0.6" value="0.53" step="0.01" /></span></label>
           <label title="brightness of a freshly-captured generation">base brightness<span class="rw"><input type="range" id="vp-standingBaseAlpha" min="0.05" max="1" value="0.45" step="0.01" /><input type="number" id="vp-standingBaseAlpha-n" min="0.05" max="1" value="0.45" step="0.01" /></span></label>
-          <label title="how strongly a routine per-hit push into the tunnel reads, relative to a real synchronizing event's full weight (1) -- keeps the tunnel continuously incrementing without every push reading as loud">per-hit push weight<span class="rw"><input type="range" id="vp-standingHitIncrementStrength" min="0.02" max="1" value="0.36" step="0.02" /><input type="number" id="vp-standingHitIncrementStrength-n" min="0.02" max="1" value="0.36" step="0.02" /></span></label>
+          <label title="how strongly a routine per-hit push into the tunnel reads, relative to a real synchronizing event's full weight (1) -- keeps the tunnel continuously incrementing without every push reading as loud">per-hit push weight<span class="rw"><input type="range" id="vp-standingHitIncrementStrength" min="0.02" max="1" value="0.36" step="0.01" /><input type="number" id="vp-standingHitIncrementStrength-n" min="0.02" max="1" value="0.36" step="0.01" /></span></label>
 
           <div class="timbre-group-label">master hull echo (the whole-phrase blueprint + its glyphs)</div>
           <label title="a brief one-shot pass, not an accumulating tunnel -- how long it lasts">echo life (ms)<span class="rw"><input type="range" id="vp-hullEchoLife" min="200" max="5000" value="4200" step="50" /><input type="number" id="vp-hullEchoLife-n" min="200" max="5000" value="4200" step="50" /></span></label>
@@ -264,7 +310,7 @@
           <label title="how long a sync-event (breath/convergence/transposition/stage) burst wave lasts">burst echo life (ms)<span class="rw"><input type="range" id="vp-echoBurstLife" min="200" max="5000" value="2650" step="50" /><input type="number" id="vp-echoBurstLife-n" min="200" max="5000" value="2650" step="50" /></span></label>
           <label>burst echo brightness<span class="rw"><input type="range" id="vp-echoBurstStrength" min="0.05" max="1.5" value="1" step="0.01" /><input type="number" id="vp-echoBurstStrength-n" min="0.05" max="1.5" value="1" step="0.01" /></span></label>
           <label title="how far a full-strength echo travels outward, toward the frame edge">outward reach<span class="rw"><input type="range" id="vp-echoReachOut" min="0.1" max="3" value="1.2" step="0.05" /><input type="number" id="vp-echoReachOut-n" min="0.1" max="3" value="1.2" step="0.05" /></span></label>
-          <label title="how far a full-strength echo travels inward, toward the hub">inward reach<span class="rw"><input type="range" id="vp-echoReachIn" min="0.1" max="1" value="0.28" step="0.02" /><input type="number" id="vp-echoReachIn-n" min="0.1" max="1" value="0.28" step="0.02" /></span></label>
+          <label title="how far a full-strength echo travels inward, toward the hub">inward reach<span class="rw"><input type="range" id="vp-echoReachIn" min="0.1" max="1" value="0.28" step="0.01" /><input type="number" id="vp-echoReachIn-n" min="0.1" max="1" value="0.28" step="0.01" /></span></label>
           <label title="&gt;1 = fade to black more gradually near the end of an echo's life, not an abrupt cutoff">fade gradualness<span class="rw"><input type="range" id="vp-echoFadeExponent" min="0.5" max="5" value="5" step="0.1" /><input type="number" id="vp-echoFadeExponent-n" min="0.5" max="5" value="5" step="0.1" /></span></label>
 
           <div class="timbre-group-label">whole-tunnel breathing</div>
@@ -280,7 +326,7 @@
           <div class="timbre-group-label">per-ring phase bar (the white timekeeping indicator)</div>
           <label title="how wide the bar and its echoes are, in spokes">bar/echo width<span class="rw"><input type="range" id="vp-phaseBarArcWidth" min="0.05" max="1.5" value="0.35" step="0.05" /><input type="number" id="vp-phaseBarArcWidth-n" min="0.05" max="1.5" value="0.35" step="0.05" /></span></label>
           <label title="how long each phase-bar echo lasts -- brief, so it stays subtle">echo life (ms)<span class="rw"><input type="range" id="vp-phaseBarEchoLife" min="100" max="3000" value="2050" step="50" /><input type="number" id="vp-phaseBarEchoLife-n" min="100" max="3000" value="2050" step="50" /></span></label>
-          <label title="lower = more subtle, less distracting from the main imagery">echo brightness<span class="rw"><input type="range" id="vp-phaseBarEchoStrength" min="0.02" max="1" value="0.22" step="0.02" /><input type="number" id="vp-phaseBarEchoStrength-n" min="0.02" max="1" value="0.22" step="0.02" /></span></label>
+          <label title="lower = more subtle, less distracting from the main imagery">echo brightness<span class="rw"><input type="range" id="vp-phaseBarEchoStrength" min="0.02" max="1" value="0.22" step="0.01" /><input type="number" id="vp-phaseBarEchoStrength-n" min="0.02" max="1" value="0.22" step="0.01" /></span></label>
         </div>
       </details>
 

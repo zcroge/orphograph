@@ -1,7 +1,7 @@
 import { deriveTrace, invalidRanges } from "./trace.js";
 import { buildProcession, describeSteps, ROTATION_SPOKE_SHIFT } from "./transform.js";
 import { hzForSpoke, PLACEHOLDER_SPOKE_OF, ringForLetter } from "./letters.js";
-import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS } from "./synth.js";
+import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS, DEFAULT_PERCUSSION_PARAMS } from "./synth.js";
 import { Sequencer } from "./sequencer.js";
 import { MidiBridge } from "./midi.js";
 import { WheelView, DEFAULT_VIEW_PARAMS } from "./view.js";
@@ -731,8 +731,10 @@ const sequencer = new Sequencer({
       // marks all of it, not just the audible subset. Audio only -- the
       // visual side no longer spawns per-hit events at all (view.js's
       // continuous extrusion layers already echo whatever's currently in
-      // the persistent trace, automatically, every frame).
-      audio.playPercussionHit(ring);
+      // the persistent trace, automatically, every frame). Pattern-mode
+      // aware now -- see triggerPercussion (owned is already computed
+      // above for the tier-emphasis velocity math).
+      triggerPercussion(ring, owned);
     }
     if (!target.isRest && velocity > 0) {
       audio.playNote(hzForSpoke(transposedSpoke(target.spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: 0.9, velocity, ring });
@@ -856,9 +858,12 @@ const sequencer = new Sequencer({
     // Resultant-rhythm percussion -- one hit per struck chord (a chord is
     // a single rhythmic event, same "once per chord, not once per letter"
     // convention meanderFlute/ringHitFlash already use in chord mode
-    // below), unconditional on tier/velocity, same as onNoteHit. Audio
-    // only, same reasoning as onNoteHit.
-    audio.playPercussionHit(ring);
+    // below), unconditional on tier/velocity in resultant/roll mode, same
+    // as onNoteHit -- see triggerPercussion. A chord "belongs" to this
+    // ring (for sparse mode) if at least one of its letters is fully this
+    // ring's own tier, same `entryVelocity(e) === 1` test recordVisit just
+    // used above.
+    triggerPercussion(ring, word.some((e) => entryVelocity(e) === 1));
     // Tracer -- chord mode already knows pulseLength exactly (sequencer.js
     // fires the next chord after exactly that many pulses), so no
     // forward-walk is needed here, unlike melody mode. Anchored on the
@@ -1537,6 +1542,7 @@ const DRONE_PANEL_KEYS = [
   "droneSubharmonicAmount", "droneSaturationAmount",
 ];
 const VIEW_PANEL_KEYS = Object.keys(DEFAULT_VIEW_PARAMS);
+const PERCUSSION_PANEL_KEYS = Object.keys(DEFAULT_PERCUSSION_PARAMS);
 
 wireTimbrePanel({
   category: "note",
@@ -1578,6 +1584,62 @@ wireTimbrePanel({
   resetBtnId: "view-preset-reset",
 });
 
+// "More dynamic range of percussion... richer variety." Same
+// wireTimbrePanel reuse as note/drone/view above -- the resultant-rhythm
+// kick/snare/hat recipe (previously inline literals) gets a live panel,
+// named-preset save/load, and factory reset for free.
+wireTimbrePanel({
+  category: "percussion",
+  idPrefix: "pp",
+  keys: PERCUSSION_PANEL_KEYS,
+  setParam: (key, value) => audio.setPercussionParam(key, value),
+  defaults: DEFAULT_PERCUSSION_PARAMS,
+  presetSelectId: "percussion-preset-select",
+  saveBtnId: "percussion-preset-save",
+  deleteBtnId: "percussion-preset-delete",
+  resetBtnId: "percussion-preset-reset",
+});
+
+// Real, named kits (character starting points, not the generic save/load
+// preset system every panel above already gets via wireTimbrePanel) --
+// same "hardcoded named preset object, shipped to every visitor" pattern
+// as WHISTLE_MODE_PRESETS. `acoustic` is DEFAULT_PERCUSSION_PARAMS
+// itself, spelled out here too so this ONE dropdown is a self-contained
+// tour of every kit, factory default included. Applied via setSliderValue
+// (main.js's own established "set a slider programmatically" idiom,
+// already used by the settings-import feature above) -- the panel's own
+// input listener does the actual apply/persist/preset-select-reset, so
+// no separate apply logic is needed here.
+const PERCUSSION_KIT_PRESETS = {
+  acoustic: { ...DEFAULT_PERCUSSION_PARAMS },
+  electronic: {
+    kickFreqStart: 180, kickFreqEnd: 40, kickSweepMs: 25, kickGain: 1.6, kickDecayMs: 140,
+    kickClickGain: 0.3, kickClickLowpassHz: 2200, kickClickDecayMs: 8,
+    snareToneHz1: 200, snareToneHz2: 400, snareToneGain1: 0.4, snareToneGain2: 0.3, snareToneDecayMs: 60,
+    snareNoiseBandHz: 2400, snareNoiseQ: 1.4, snareNoiseGain: 0.65, snareNoiseDecayMs: 70,
+    hatHighpassHz: 8000, hatGain: 0.3, hatDecayMs: 18,
+  },
+  frameDrum: {
+    kickFreqStart: 120, kickFreqEnd: 60, kickSweepMs: 70, kickGain: 1.1, kickDecayMs: 340,
+    kickClickGain: 0.15, kickClickLowpassHz: 900, kickClickDecayMs: 20,
+    snareToneHz1: 150, snareToneHz2: 260, snareToneGain1: 0.45, snareToneGain2: 0.25, snareToneDecayMs: 160,
+    snareNoiseBandHz: 1200, snareNoiseQ: 0.5, snareNoiseGain: 0.3, snareNoiseDecayMs: 140,
+    hatHighpassHz: 4500, hatGain: 0.2, hatDecayMs: 55,
+  },
+  industrial: {
+    kickFreqStart: 200, kickFreqEnd: 45, kickSweepMs: 55, kickGain: 1.6, kickDecayMs: 300,
+    kickClickGain: 0.9, kickClickLowpassHz: 2600, kickClickDecayMs: 25,
+    snareToneHz1: 220, snareToneHz2: 470, snareToneGain1: 0.45, snareToneGain2: 0.45, snareToneDecayMs: 130,
+    snareNoiseBandHz: 2600, snareNoiseQ: 0.4, snareNoiseGain: 0.8, snareNoiseDecayMs: 180,
+    hatHighpassHz: 5000, hatGain: 0.45, hatDecayMs: 70,
+  },
+};
+$("percussion-kit-preset").addEventListener("change", (e) => {
+  const kit = PERCUSSION_KIT_PRESETS[e.target.value];
+  if (!kit) return; // "(custom)" -- leave whatever's currently tuned alone
+  for (const key of PERCUSSION_PANEL_KEYS) setSliderValue(`pp-${key}`, kit[key]);
+});
+
 // "Full authorship over defaults/presets... a portable way to
 // save/share/restore a full tuning state." One combined export covering
 // all three tunable categories at once -- exactly the numeric keys
@@ -1602,6 +1664,7 @@ $("export-settings").addEventListener("click", () => {
     note: currentCategoryValues("np", NOTE_PANEL_KEYS),
     drone: currentCategoryValues("dp", DRONE_PANEL_KEYS),
     view: currentCategoryValues("vp", VIEW_PANEL_KEYS),
+    percussion: currentCategoryValues("pp", PERCUSSION_PANEL_KEYS),
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -1627,6 +1690,7 @@ $("import-settings-file").addEventListener("change", async (e) => {
     apply("np", NOTE_PANEL_KEYS, data.note);
     apply("dp", DRONE_PANEL_KEYS, data.drone);
     apply("vp", VIEW_PANEL_KEYS, data.view);
+    apply("pp", PERCUSSION_PANEL_KEYS, data.percussion);
   } catch (err) {
     alert("Couldn't read that settings file: " + err.message);
   }
@@ -1669,6 +1733,34 @@ function applyArpeggioDirection(ring, direction) {
   applyArpeggioDirection(ring, directionSelect.value);
   directionSelect.addEventListener("change", (e) => applyArpeggioDirection(ring, e.target.value));
 });
+
+// Percussion pattern modes -- "different modes of timekeeping,
+// stylization or intensity." One GLOBAL lever, not per-ring (the three
+// roles already read as one resultant-rhythm ensemble, same reasoning as
+// the shared kit above): `resultant` (default, unchanged -- one event per
+// real geometric hit, density-gated) / `sparse` (only this ring's own
+// tier-owned hits sound) / `roll` (a surviving hit adds a quick flam of
+// quieter echo-hits). `triggerPercussion` replaces the two previously-
+// unconditional `audio.playPercussionHit(ring)` call sites below.
+let percussionPatternMode = "resultant";
+$("percussion-pattern-mode").addEventListener("change", (e) => { percussionPatternMode = e.target.value; });
+
+function triggerPercussion(ring, owned) {
+  if (percussionPatternMode === "sparse" && !owned) return;
+  const sounded = audio.playPercussionHit(ring);
+  if (sounded && percussionPatternMode === "roll") {
+    // Grace-note echoes timed as a fraction of THIS ring's own current
+    // pulse duration -- derived, not a fixed ms, so a fast ring's flam
+    // tightens and a slow ring's relaxes, the same convention every other
+    // timing value in this engine already follows. Both bypass the
+    // density gate (gainMultiplier !== null) -- an echo embellishes an
+    // already-decided real hit, it isn't a second independent
+    // resultant-rhythm event for the density arc to separately thin.
+    const pulseMs = 1000 / ringPulsesPerSecond(ring);
+    setTimeout(() => audio.playPercussionHit(ring, { gainMultiplier: 0.45 }), pulseMs * 0.15);
+    setTimeout(() => audio.playPercussionHit(ring, { gainMultiplier: 0.22 }), pulseMs * 0.3);
+  }
+}
 
 // Native chord voicing -- each word's own real letters drive the shared
 // flute voice's chord (see synth.js's meanderFlute/src/voicing.js), rather
