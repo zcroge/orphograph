@@ -1809,6 +1809,90 @@ function applyPercussionLevel(value) {
 applyPercussionLevel(parseFloat($("percussion-level").value));
 $("percussion-level").addEventListener("input", (e) => applyPercussionLevel(parseFloat(e.target.value)));
 
+// Vibe presets -- "the most intuitive, plug-and-play experience... the
+// same underlying beat and tempo layering could make something like
+// contemplation/meditation, intense technical groovy jam sessions,
+// spiritual communal drum circling, or just tinkering around." One
+// shared behavioral bundle across every structural lever this session
+// built (kalimba mode/direction per ring, percussion kit/pattern, tier
+// emphasis, ghost-taps, transposition, flute-follow, drone on/off) --
+// deliberately NOT the drone/note timbre panels (dozens of individual
+// synthesis params stay whatever they're currently tuned to; a vibe
+// reshapes how the piece BEHAVES, not its raw tone). Same "hardcoded
+// named object, shipped to every visitor" pattern as
+// PERCUSSION_KIT_PRESETS/WHISTLE_MODE_PRESETS above -- distinct from the
+// generic per-category save/load system, since a vibe is a fixed
+// authored bundle, not something built up and saved by hand (though
+// every lever it sets can still be hand-tuned afterward, same as
+// applying any other preset).
+const VIBE_PRESETS = {
+  contemplation: {
+    mode: { given: "melody", received: "melody", made: "melody" },
+    direction: { given: "auto", received: "auto", made: "auto" },
+    percussionKit: "frameDrum", percussionPattern: "sparse",
+    tierEmphasis: 1, ghostTaps: true,
+    transpositionEnabled: false, transpositionStep: 7,
+    whistleFollow: true, droneOn: true,
+  },
+  jam: {
+    mode: { given: "chordPluck", received: "arpeggio", made: "arpeggio" },
+    direction: { given: "auto", received: "auto", made: "auto" },
+    percussionKit: "industrial", percussionPattern: "roll",
+    tierEmphasis: 0, ghostTaps: false,
+    transpositionEnabled: true, transpositionStep: 7,
+    whistleFollow: true, droneOn: true,
+  },
+  communal: {
+    mode: { given: "chordPluck", received: "melody", made: "melody" },
+    direction: { given: "auto", received: "auto", made: "auto" },
+    percussionKit: "frameDrum", percussionPattern: "resultant",
+    tierEmphasis: 0.5, ghostTaps: true,
+    transpositionEnabled: true, transpositionStep: 7,
+    whistleFollow: true, droneOn: true,
+  },
+  tinkering: {
+    mode: { given: "melody", received: "melody", made: "melody" },
+    direction: { given: "auto", received: "auto", made: "auto" },
+    percussionKit: "acoustic", percussionPattern: "resultant",
+    tierEmphasis: 1, ghostTaps: true,
+    transpositionEnabled: true, transpositionStep: 7,
+    whistleFollow: true, droneOn: true,
+  },
+};
+// Sets a control's value/checked state and fires the SAME event type its
+// own real listener already listens for, so that ONE existing listener
+// does the actual apply/persist/UI-sync work -- no separate apply logic
+// duplicated here. `value` a boolean -> `.checked` + "change" (every
+// checkbox lever above listens on change); otherwise `.value` + "change"
+// (every select lever above listens on change too). Sliders/number
+// inputs that listen on "input" instead (tier-emphasis, transposition-
+// step) reuse the existing setSliderValue for that reason.
+function fireChange(id, value) {
+  const el = $(id);
+  if (typeof value === "boolean") el.checked = value; else el.value = value;
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+function applyVibePreset(name) {
+  const vibe = VIBE_PRESETS[name];
+  if (!vibe) return; // "(custom)" -- leave whatever's currently set alone
+  for (const ring of ["given", "received", "made"]) {
+    fireChange(`mode-${ring}`, vibe.mode[ring]);
+    fireChange(`arpeggio-direction-${ring}`, vibe.direction[ring]);
+  }
+  fireChange("percussion-kit-preset", vibe.percussionKit);
+  fireChange("percussion-pattern-mode", vibe.percussionPattern);
+  setSliderValue("tier-emphasis", vibe.tierEmphasis);
+  fireChange("ghost-taps", vibe.ghostTaps);
+  fireChange("transposition-enabled", vibe.transpositionEnabled);
+  setSliderValue("transposition-step", vibe.transpositionStep);
+  fireChange("whistle-follow", vibe.whistleFollow);
+  // The select's own "change" event is itself a real user gesture, same
+  // as clicking the drone button directly -- safe to start audio here.
+  audio.ensureContext();
+  setDrone(vibe.droneOn);
+}
+$("vibe-preset").addEventListener("change", (e) => applyVibePreset(e.target.value));
+
 // A single rAF loop drives the canvas -- tickRate() (above, in the
 // procession-rate section) already calls render() every frame via its own
 // requestAnimationFrame chain; a second loop() here was calling render() a
