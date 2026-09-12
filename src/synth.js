@@ -277,9 +277,18 @@ export const DEFAULT_DRONE_PARAMS = {
   vibratoCyclesPerPulse: 0.5,  // vibrato wobbles N times per THIS ring's own pulse
   vibratoCents: 34,
   breathNoiseGain: 0.07,
-  formantF1Q: 18,
-  formantF2Q: 7.5,
-  formantBlendGain: 2.2,
+  // "Piercing... like a car horn." Root cause, measured directly: Q=18 on
+  // a FIXED, unmodulated 570Hz bandpass is an unusually narrow, sharp
+  // resonant spike (typical vocal-formant Q sits 5-15; a static, this-
+  // narrow peak reads as nasal/honky rather than a moving vocal-tract
+  // color) -- the single most identifiable "car horn" cause in the whole
+  // chain, independent of anything the flute itself does. Widened to a
+  // softer, more vowel-like resonance; formantBlendGain lowered
+  // proportionally so the now-broader (louder-sounding) peaks don't just
+  // reintroduce the same edge at a wider bandwidth.
+  formantF1Q: 5,
+  formantF2Q: 4.5,
+  formantBlendGain: 1.3,
   // "The bass drone's own spectral richness is being filtered out
   // downstream: moveFilter sits AFTER the formant pair and attenuates the
   // 570/950Hz formant peaks by ~14-22dB (up to ~36dB at the sweep's
@@ -487,8 +496,13 @@ export const DEFAULT_DRONE_PARAMS = {
   //      hit (whistleChiffAmount), decaying back over the SAME note-gate
   //      window (see whistleArticulationPulseFraction below) as the
   //      loudness bump.
-  whistleVibratoRateHz: 3.8,
-  whistleVibratoCents: 13,     // pitch depth
+  // Slowed from an operatic-ish 3.8Hz -- part of the "more spectral,
+  // Tibetan monastery" retuning: a slower, wider sway reads as a singing
+  // bowl's own natural beat-frequency drift, where the old rate read as a
+  // more nervous, vocal-tremor wobble. Depth raised slightly so the
+  // slower rate doesn't just feel inert.
+  whistleVibratoRateHz: 2.1,
+  whistleVibratoCents: 16,     // pitch depth
   whistleVibratoAmpDepth: 0.09, // amplitude depth, as a fraction of tone level -- real breath vibrato couples both
   // "Still just a keyboard pad that sounds more or less spacey with the
   // wavering vibratos -- not a flute at all." Root cause, historically: ALL
@@ -531,8 +545,20 @@ export const DEFAULT_DRONE_PARAMS = {
   // AND a brief brightening (more turbulence, momentarily) together,
   // both decaying back to steady over the same derived note-gate window
   // (see whistleArticulationPulseFraction below) as the tone's own gate.
-  whistleBreathSurgeAmount: 0.94,
-  whistleChiffAmount: 1.1, // how far the breath color opens up on a real hit, as a multiple of its own pitch-tracked base
+  // "Piercing... like a car horn, theremin parlor demon conjuration
+  // horror, the opposite of meditative." Measured cause: at the old
+  // values, EVERY note change compounded three simultaneous overshoots
+  // above the steady level -- tone +50% (whistleArticulationAmount, see
+  // below), breath loudness +94% (this param), and breath brightness
+  // more than DOUBLING (whistleChiffAmount) -- all landing at once, on
+  // top of a hard (unramped) filter-cutoff jump (see the chiff code in
+  // meanderFlute, now a short ramp instead of an instant step). That's a
+  // real transient spike, not a taste call -- reads as a percussive
+  // "honk" on every single articulation, working directly against a
+  // breathy, sustained monastery-drone feel. Gentled well below the old
+  // ceiling.
+  whistleBreathSurgeAmount: 0.3,
+  whistleChiffAmount: 0.35, // how far the breath color opens up on a real hit, as a multiple of its own pitch-tracked base
   // "The note transitions still sound like a synth, not a flute changing
   // notes... there needs to be some kind of note envelope/gate per voice
   // that allows seamless droning while a single tone is allowed to
@@ -549,7 +575,11 @@ export const DEFAULT_DRONE_PARAMS = {
   // articulating." whistleNoteGateDipAmount is how far the tone (and
   // breath, together) duck before the new pitch and the attack -- 0 is
   // the old smooth-retune behavior, higher is a more clearly tongued gap.
-  whistleNoteGateDipAmount: 0.84,
+  // Pulled back from a near-total (0.84 -> 16% remaining) dip -- that's a
+  // hard synth-gate stutter, not a monk's breath between phrases; a
+  // gentler dip reads as a smooth swell/glide, closer to a singing bowl's
+  // own continuous sustain, while still audibly re-articulating.
+  whistleNoteGateDipAmount: 0.45,
   // "As many of our parameters as possible should derive/infer timing
   // from the wheel/input/transform state itself, rather than apply
   // arbitrary values." whistleBreathSurgeMs (a fixed 180ms) was exactly
@@ -592,7 +622,10 @@ export const DEFAULT_DRONE_PARAMS = {
   //     means the tone re-articulates along with the noise, not just the
   //     noise alone.
   whistleBreathToneCoupling: 0.5,
-  whistleArticulationAmount: 0.5,
+  // Part of the same compounded-transient fix as whistleBreathSurgeAmount/
+  // whistleChiffAmount above -- was pushing the tone itself to 1.5x on
+  // every note change, right alongside the other two. Gentled together.
+  whistleArticulationAmount: 0.18,
 
   // "The entire sound profile still reads as a digital pipe organ. We're
   // not getting anywhere like this." Every fix through phase 17 modulated
@@ -660,21 +693,34 @@ export const DEFAULT_DRONE_PARAMS = {
   // own sample library covers (FLUTE_SAMPLES) -- t=0 at the lowest real
   // recording, t=1 at the highest. Growl (low register) is modeled on the
   // bass drone's own proven F1/F2 talk-box vocal-tract pair, just lower/
-  // throatier and deliberately broad-Q (a didgeridoo growl is rough, not
-  // pure -- the chamber-Q tuning pass just found that sharp/high-Q stacking
-  // is exactly what reads as "clean/organ," so this must not repeat that).
-  whistleGrowlAmount: 0.57, // authored ceiling, scaled by (1 - t)
+  // throatier.
+  //
+  // "Piercing, like a car horn... theremin parlor demon conjuration horror,
+  // the opposite of meditative/trance-inducing." Real, measured cause: the
+  // saturator sits AFTER the bandpass (see setDroneVoices), so it clips an
+  // ALREADY-resonant, narrow peak -- that concentrates the new harmonic
+  // content it generates right back into the same narrow band instead of
+  // spreading it, which is what actually reads as harsh/metallic rather
+  // than a rough, breathy growl. The earlier "deliberately broad-Q" call
+  // was wrong on its own terms: Q=5.1 is a genuinely narrow resonance in
+  // absolute terms (~18Hz wide at 90Hz), and saturating a narrow resonance
+  // is close to the textbook way to make something sound like a car horn,
+  // not a didgeridoo. Widened and gentled -- a Tibetan singing-bowl/
+  // didgeridoo growl is rough and breathy, not a clipped whistle.
+  whistleGrowlAmount: 0.32, // authored ceiling, scaled by (1 - t)
   whistleGrowlF1Hz: 90,
   whistleGrowlF2Hz: 580,
-  whistleGrowlQ: 5.1, // shared by both bands -- one "how rough" knob, not two
+  whistleGrowlQ: 2.2, // shared by both bands -- one "how rough" knob, not two
   whistleGrowlWanderHz: 0.35, // free-running "vocalization" wander, NOT pulse-locked
   whistleGrowlWanderDepth: 155, // Hz
   // Same real fix as the bass drone's own droneSaturationAmount -- growl
   // used to be ONLY a bandpass EQ bump (a real filter can't generate new
   // harmonic content), so at even its authored maximum it read as a
   // +-2.6dB tone-color nudge, not a growl. Soft-clip (tanh) waveshaping on
-  // growl's own two bandpassed bands adds the actual roughness.
-  whistleGrowlSaturationAmount: 0.3,
+  // growl's own two bandpassed bands adds the actual roughness -- lowered
+  // alongside the Q widening above, so the softer resonance doesn't just
+  // get re-sharpened by a hard drive amount.
+  whistleGrowlSaturationAmount: 0.14,
 
   // Wooden-flute-drone (high register) -- modeled on the bass drone's own
   // voiceLfo/breathPulsesPerCycle: a per-ring LFO breathing the ring's own
@@ -1872,7 +1918,15 @@ export class OrphographAudio {
     // Re-clamp after the chiff boost -- _breathColorHzFor's own 8000Hz
     // ceiling only bounds the STEADY value; multiplying it by (1+chiff)
     // afterward could otherwise punch back through that ceiling.
-    colorFreq.setValueAtTime(Math.min(8000, breathColorBase * (1 + dp.whistleChiffAmount)), now + dipSec + attackSec);
+    //
+    // Ramped over the attack window (not a hard setValueAtTime step) --
+    // an instantaneous filter-cutoff jump is its own audible click on a
+    // biquad, a second transient discontinuity stacked right on top of
+    // the chiff's own intended brightening. Anchored flat through the
+    // dip (matching the tone/breath gain stages' own shape), then a
+    // real ramp across the SAME attack window they already use.
+    colorFreq.setValueAtTime(breathColorBase, now + dipSec);
+    colorFreq.linearRampToValueAtTime(Math.min(8000, breathColorBase * (1 + dp.whistleChiffAmount)), now + dipSec + attackSec);
     colorFreq.setTargetAtTime(breathColorBase, now + dipSec + attackSec, decayTc);
   }
 
