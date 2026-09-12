@@ -1095,15 +1095,15 @@ export class WheelView {
         const ringOffset = ringDialOffsets?.[ring.name] || 0;
         const bandR = outerR * (ring.rFrom + RING_LABEL_BAND_FRACTION * (ring.rTo - ring.rFrom));
         const p = spokePoint(s - ringOffset, bandR, cx, cy);
-        const labelHeightPx = isPole(s) ? 11 : 10;
-        ctx.font = isPole(s) ? "bold 11px sans-serif" : "10px sans-serif";
+        const labelHeightPx = isPole(s) ? 17 : 16;
+        ctx.font = isPole(s) ? "bold 17px sans-serif" : "16px sans-serif";
         ctx.fillStyle = WHEEL_PALETTE.label;
         drawRadialGlyph(ctx, letters, p.x, p.y, s - ringOffset, labelHeightPx);
       }
       if (groups.unassigned && groups.unassigned.length) {
         const p = spokePoint(s - rimOffset, outerR + 26, cx, cy);
-        const unassignedHeightPx = isPole(s) ? 11 : 10;
-        ctx.font = isPole(s) ? "italic bold 11px sans-serif" : "italic 10px sans-serif";
+        const unassignedHeightPx = isPole(s) ? 17 : 16;
+        ctx.font = isPole(s) ? "italic bold 17px sans-serif" : "italic 16px sans-serif";
         const circumR = Math.max(11, radialGlyphWidth(ctx, groups.unassigned, unassignedHeightPx) / 2 + 6);
         ctx.beginPath();
         ctx.arc(p.x, p.y, circumR, 0, Math.PI * 2);
@@ -1549,13 +1549,13 @@ export class WheelView {
         ctx.stroke();
         ctx.setLineDash([]);
         if (this.masterHullLetters.length === this.masterHull.length) {
-          ctx.font = "9px sans-serif";
+          ctx.font = "13px sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           this.masterHull.forEach((s, i) => {
             const pt = spokePoint(s - age.rimOffsetAtCapture, r, cx, cy);
             ctx.fillStyle = "#f4ead0";
-            drawRadialGlyph(ctx, [this.masterHullLetters[i]], pt.x, pt.y, s - age.rimOffsetAtCapture, 9);
+            drawRadialGlyph(ctx, [this.masterHullLetters[i]], pt.x, pt.y, s - age.rimOffsetAtCapture, 13);
           });
         }
         ctx.globalAlpha = 1;
@@ -1588,13 +1588,13 @@ export class WheelView {
       ctx.stroke();
       ctx.setLineDash([]);
       if (fc.letters.length === fc.spokes.length) {
-        ctx.font = "9px sans-serif";
+        ctx.font = "13px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         fc.spokes.forEach((s, i) => {
           const pt = spokePoint(s - fc.rotationAtCapture, r, cx, cy);
           ctx.fillStyle = "#f4ead0";
-          drawRadialGlyph(ctx, [fc.letters[i]], pt.x, pt.y, s - fc.rotationAtCapture, 9);
+          drawRadialGlyph(ctx, [fc.letters[i]], pt.x, pt.y, s - fc.rotationAtCapture, 13);
         });
       }
       ctx.globalAlpha = 1;

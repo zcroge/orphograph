@@ -253,6 +253,19 @@ input[type="text"] {
   pointer-events: none;
   color: var(--text);
 }
+/* The phrase input specifically (not every input[type="text"] on the
+   page, e.g. the scale-text field elsewhere) -- much larger than a
+   normal text field so its own pixel-font glyphs get real resolution.
+   Measured, not guessed: at 15px, one monospace character cell is only
+   ~8px wide -- nowhere near enough to render a 16-column pixel grid
+   without crushing multiple columns into the same screen pixel ("the F
+   is illegible"). 36px measures ~20px per cell, comfortably above the
+   16px (one real pixel per grid column) floor "at least 1-to-1 pixel
+   display" asks for. Both #input AND its backdrop must change together
+   -- see the comment above on why they have to stay byte-identical. */
+#input, .input-backdrop {
+  font-size: 36px;
+}
 .input-backdrop .invalid-char {
   color: var(--danger);
   font-weight: 700;
