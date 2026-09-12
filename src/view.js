@@ -239,22 +239,33 @@ export class WheelView {
     this.resize(canvas.clientWidth || canvas.width, canvas.clientHeight || canvas.height);
     this.masterHull = [];
     this.masterHullLetters = [];
-    // "A continuous, full procession reflected in the orbiting
-    // glyph-trail... after making a full circle, the glyphs should drop
-    // into a lower, spiraling, more compact continuous trail." Unlike
-    // masterHull (the typed phrase's own KNOWN shape, set once when a
-    // phrase loads) or persistentTraceByRing (per-ring, wiped on every
-    // given-ring lap), this accumulates live, one entry per REAL sounded
-    // note across all three rings (see recordCycleReadoutLetter/main.js's
-    // onNoteHit), and ages/coils inward on its own -- see the
-    // render()-time draw block for the lap/radius/alpha math. { letter,
-    // capturedAtPulse } -- capturedAtPulse is the raw, never-wrapping
-    // sequencer.masterPulseCount at the moment it was stamped, so both
-    // "how far around its own lap has this drifted" and "how many laps
-    // ago did that lap complete" are always derivable from just
-    // (liveCount - capturedAtPulse), no modular bookkeeping needed at
-    // capture time.
+    // "A continuous marquee... resulting in a full, unbroken ring when
+    // the full cyclic procession (standard 12 transpositions) is
+    // completed." Unlike masterHull (the typed phrase's own KNOWN shape,
+    // set once when a phrase loads) or persistentTraceByRing (per-ring,
+    // wiped on every given-ring lap), this accumulates live, one entry
+    // per REAL sounded note across all three rings (see
+    // recordCycleReadoutLetter/main.js's onNoteHit), each one settling at
+    // a FIXED position for the rest of the current series -- a growing
+    // record, not a rolling window -- see the render()-time draw block
+    // for the placement math. { letter, capturedAtPulse } --
+    // capturedAtPulse is the raw, never-wrapping sequencer.masterPulseCount
+    // at the moment it was stamped; render() places it relative to
+    // main.js's own seriesStartPulse/seriesTotalMasterPulses (the current
+    // series' own real clock, see main.js's recomputeSeriesTotalPulses).
     this._cycleReadout = [];
+    // Completed marquee rings, pushed outward and frozen -- "this ring
+    // can be pushed outwards and a new one can be started on completion
+    // in the same standing-echo-push convention we're already using."
+    // Same real shift-register idiom as `_standingGenerations` below
+    // (every existing entry pushed exactly one rank farther out whenever
+    // a new one is captured, eased via `_standingDepth`, fading with
+    // rank/depth) -- just single-direction (outward only, per the
+    // request) and captured on a genuinely rare, real event (a whole
+    // transposition series closing, see resetCycleReadoutSeries) rather
+    // than every hit. { entries: [{letter, screenSpoke}], rank, depthFrom,
+    // depthEaseStartedAt }.
+    this._readoutGenerations = [];
     // "There should be some level of flat-plane persistence to give a
     // readable trace the user can see clearly." Capacity-bound, not time-
     // bound (see setTraceCapacity), stays at the ring's own full base
@@ -437,13 +448,11 @@ export class WheelView {
     this._labelHeightPx = 16 * scale;
     this._poleLabelHeightPx = 17 * scale;
     this._hullHeightPx = 13 * scale;
-    // Kept small on purpose -- the procession-history spiral's own
-    // per-lap radial step (SPIRAL_LAP_STEP, see render()'s own spiral
-    // block) is narrow, and a genuine readout of "the whole procession
-    // so far" can carry many simultaneous entries across many coiled
-    // laps at once; a modest glyph height keeps each lap legible without
-    // its letters overlapping their own neighbors, or the lap coiled in
-    // just inside it.
+    // Kept small on purpose -- a genuine readout of "the whole
+    // transposition series so far" can carry many simultaneous entries
+    // packed around one ring at once (that's the point -- "much more
+    // dense"); a modest glyph height keeps them legible without
+    // neighboring letters overlapping.
     this._cycleReadoutHeightPx = 12 * scale;
   }
 
@@ -454,6 +463,7 @@ export class WheelView {
     this.masterHull = [];
     this.masterHullLetters = [];
     this._cycleReadout = [];
+    this._readoutGenerations = [];
     this._hullEchoAges = [];
     this._hullFrozenCopies = [];
     this._eventPulse = { amount: 0, startedAt: 0, life: 1 };
@@ -902,18 +912,48 @@ export class WheelView {
     this._cycleReadout.push({ letter, capturedAtPulse });
   }
 
+  // Bounded, same "genuinely closed, not open-ended" discipline as every
+  // other accumulating collection in this file -- a pushed-out ring this
+  // old has faded to nothing anyway (see render()'s own alpha formula).
+  static MAX_READOUT_GENERATIONS = 6;
+
   // "All the way back to the first transposition/transform in the full
   // series" -- called from main.js the moment the live transposition
   // series actually closes (returns to its own starting offset, a real,
-  // discrete, countable event -- see wheel.js's transpositionCycleSteps).
-  // A fixed ~10-lap radial budget (see the render()-time spiral block's
-  // own ACTIVE_RADIUS/INNER_LIMIT comment) can't literally keep an
-  // arbitrarily long series on screen forever; clearing here at the one
-  // moment that's actually structurally meaningful is what stands in for
-  // that, so the next series starts its own fresh spiral from nothing,
-  // the same "each new phrase starts fresh" treatment reset() already
-  // gives the whole readout on Play.
+  // discrete, countable event -- see wheel.js's transpositionCycleSteps
+  // and main.js's recomputeSeriesTotalPulses) -- or, same treatment, when
+  // the step-size slider changes mid-series and invalidates it early.
+  // "This ring can be pushed outwards and a new one can be started on
+  // completion in the same standing-echo-push convention we're already
+  // using" -- the CURRENT marquee ring (by now a genuinely full, unbroken
+  // circle -- see render()'s own placement math for why that's exactly
+  // true at this moment) is frozen and pushed into `_readoutGenerations`,
+  // the same real shift-register idiom `captureStandingGeneration` already
+  // uses for the per-ring standing tunnel: every existing pushed-out
+  // generation is bumped exactly one rank farther out first, then the new
+  // one joins at rank 0. Each entry's own screenSpoke is computed ONCE,
+  // right here, from the series clock that was actually live for it
+  // (`_currentSeriesStartPulse`/`_currentSeriesTotalMasterPulses`, frozen
+  // every render() call -- see its own comment) -- so a pushed-out ring's
+  // shape can never depend on main.js's clock once that's moved on to the
+  // NEXT series.
   resetCycleReadoutSeries() {
+    const now = performance.now();
+    if (this._cycleReadout.length > 0) {
+      for (const gen of this._readoutGenerations) {
+        gen.depthFrom = this._standingDepth(gen, now);
+        gen.rank += 1;
+        gen.depthEaseStartedAt = now;
+      }
+      const start = this._currentSeriesStartPulse ?? 0;
+      const total = this._currentSeriesTotalMasterPulses || 1;
+      const entries = this._cycleReadout.map((e) => ({
+        letter: e.letter,
+        screenSpoke: 1 + ((e.capturedAtPulse - start) / total) * SPOKE_COUNT,
+      }));
+      this._readoutGenerations.unshift({ entries, rank: 0, depthFrom: -1, depthEaseStartedAt: now });
+      if (this._readoutGenerations.length > WheelView.MAX_READOUT_GENERATIONS) this._readoutGenerations.pop();
+    }
     this._cycleReadout = [];
   }
 
@@ -993,7 +1033,7 @@ export class WheelView {
     this.captureStandingGeneration(vp.standingHitIncrementStrength);
   }
 
-  render({ ringLabelsAtSpoke, transposition, hullCursorByRing, ringHitFlash, masterRotationOffset, ringDialOffsets, droneBreathHz = 0, masterPulseCount = 0 }) {
+  render({ ringLabelsAtSpoke, transposition, hullCursorByRing, ringHitFlash, masterRotationOffset, ringDialOffsets, droneBreathHz = 0, masterPulseCount = 0, seriesStartPulse = 0, seriesTotalMasterPulses = GRAND_CONVERGENCE_PULSES }) {
     const { ctx, cx, cy, outerR } = this;
     const scale = this._scale;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -1079,87 +1119,78 @@ export class WheelView {
       ctx.fill();
     }
 
-    // The procession-history spiral -- "after making a full circle, the
-    // glyphs should drop into a lower, spiraling, more compact continuous
-    // trail of the glyphs/notes played... a continuous, full procession
-    // reflected in the orbiting glyph-trail, not the sparse and quickly
-    // orbiting trickle." Replaces the old single 20-second rolling ring
-    // (one lap, drop): every entry still sweeps its OWN lap exactly like
-    // before -- stamped at the write head (spoke 1) the instant it's
-    // played (see recordCycleReadoutLetter), drifting clockwise over
-    // exactly one grand-convergence cycle (wheel.js's
-    // GRAND_CONVERGENCE_PULSES, a fixed 20.0s at the locked 72 BPM
-    // anchor) -- but once that lap completes, the entry no longer drops:
-    // it coils one step INWARD instead, to a smaller radius, and keeps
-    // its angular position (screenSpoke) permanently from then on,
-    // effectively frozen at wherever its own lap happened to leave it.
-    // Every further completed lap steps it inward again, dimmer each
-    // time -- a real, continuous, MANY-lap trail rather than a
-    // one-lap-then-gone window, spanning back through the whole
-    // performance (bounded only by the radial budget below, see
-    // ACTIVE_RADIUS/INNER_LIMIT's own comment) rather than just the last
-    // 20 seconds. This is still the "stable record" palette
-    // (WHEEL_PALETTE.label), not the bright active/echo one (#f4ead0) --
-    // a quiet, always-legible readout, same visual role
-    // persistentTraceByRing already plays for its own per-ring trace,
-    // just unified across all three rings and rim-mounted instead.
+    // The procession-history marquee -- "a continuous marquee... resulting
+    // in a full, unbroken ring when the full cyclic procession (standard
+    // 12 transpositions) is completed." A genuine growing record, not a
+    // rolling window: every entry settles at a FIXED position (relative to
+    // where the current transposition SERIES itself began, not a fixed
+    // wall-clock lap) the instant it's played, and stays there for the
+    // rest of the series -- see recordCycleReadoutLetter/main.js's
+    // onNoteHit. `seriesStartPulse`/`seriesTotalMasterPulses` (main.js's
+    // recomputeSeriesTotalPulses) are chosen so that "1 full series
+    // elapsed" IS "1 full 360-degree lap" -- so by construction, the ring
+    // reads as a genuinely complete, unbroken circle exactly at the real
+    // moment the series closes, packed with every note played across the
+    // WHOLE series (all three rings, every transposition step), not just
+    // a short rolling window -- "much more dense" falls out of that for
+    // free. The marquee motion itself lives in the WRITE HEAD (below),
+    // sweeping continuously in real time -- new letters land wherever it
+    // currently is; already-placed ones never move again, the way ink
+    // laid down by a moving pen doesn't move once dry. This is the
+    // "stable record" palette (WHEEL_PALETTE.label), not the bright
+    // active/echo one (#f4ead0) -- a quiet, always-legible readout, same
+    // visual role persistentTraceByRing already plays for its own
+    // per-ring trace, just unified across all three rings and rim-mounted
+    // instead. On a real series close (or an early restart -- the
+    // step-size slider changing mid-series), this whole ring is pushed
+    // outward as a standing echo instead of just clearing -- see
+    // resetCycleReadoutSeries.
     {
-      // The radial band this spiral has to work with -- real room now
-      // that the rim-dial ring (which used to occupy outerR+14..+26) is
-      // gone. ACTIVE_RADIUS is where the currently-open (newest) lap
-      // always sweeps, exactly where the old single-lap ring used to
-      // live; INNER_LIMIT is as far in as a coil is allowed to shrink
-      // before it's pruned for good, just past the rim ticks.
+      // Real room now that the rim-dial ring (which used to occupy
+      // outerR+14..+26) is gone -- the marquee sits where the old
+      // single-lap ring used to live.
       const ACTIVE_RADIUS = outerR + 88 * scale;
-      const INNER_LIMIT = outerR + 16 * scale;
-      const SPIRAL_LAP_STEP = 7 * scale;
-      const MAX_LAPS_VISIBLE = Math.floor((ACTIVE_RADIUS - INNER_LIMIT) / SPIRAL_LAP_STEP);
 
-      // Static track + write head, both fixed at ACTIVE_RADIUS -- the
-      // one lap actually still moving; older, coiled-in laps have no
-      // track of their own (they're a settled record, not a live lane).
+      // Frozen for resetCycleReadoutSeries (called from main.js, outside
+      // render()) to place a closing ring's own entries against -- same
+      // "freeze the live value for outside-render() callers" idiom
+      // _currentRimOffset/_currentRingDialOffsets already use just below.
+      this._currentSeriesStartPulse = seriesStartPulse;
+      this._currentSeriesTotalMasterPulses = seriesTotalMasterPulses;
+
+      // Static track, always visible.
       ctx.beginPath();
       ctx.arc(cx, cy, ACTIVE_RADIUS, 0, Math.PI * 2);
       ctx.strokeStyle = WHEEL_PALETTE.structureDim;
       ctx.lineWidth = 1;
       ctx.stroke();
-      const headIn = spokePoint(1, ACTIVE_RADIUS - 4 * scale, cx, cy);
-      const headOut = spokePoint(1, ACTIVE_RADIUS + 4 * scale, cx, cy);
+
+      // The write head -- "where new content currently appears" is no
+      // longer a fixed spoke-1 tick: it's a live cursor sweeping
+      // continuously around the ring at exactly the series' own real
+      // pace, the one genuinely moving thing in this whole readout (every
+      // other visual motion here is new content simply appearing farther
+      // and farther ahead of it as the series goes on). A small glowing
+      // marker, same visual language as the transposition ring's own
+      // marker just above (a cool, neutral near-white rather than that
+      // ring's violet, so the two are never mistaken for one another).
+      const writeHeadSpoke = 1 + ((masterPulseCount - seriesStartPulse) / seriesTotalMasterPulses) * SPOKE_COUNT;
+      const headP = spokePoint(writeHeadSpoke, ACTIVE_RADIUS, cx, cy);
       ctx.beginPath();
-      ctx.moveTo(headIn.x, headIn.y);
-      ctx.lineTo(headOut.x, headOut.y);
-      ctx.strokeStyle = WHEEL_PALETTE.structure;
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      ctx.arc(headP.x, headP.y, 3.5 * scale, 0, Math.PI * 2);
+      ctx.shadowColor = "#f4ead0";
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = "#f4ead0";
+      ctx.fill();
+      ctx.shadowBlur = 0;
 
       ctx.font = `${this._cycleReadoutHeightPx}px sans-serif`;
-      // lapIndex/positionWithinLap: pull a raw (never-wrapping) pulse
-      // count apart into "which lap" and "how far around that lap,"
-      // exactly once each, for both the live clock and every entry's own
-      // capture time -- see lapsAgo/screenSpoke below.
-      const lapIndex = (pulse) => Math.floor(pulse / GRAND_CONVERGENCE_PULSES);
-      const positionWithinLap = (pulse) => ((pulse % GRAND_CONVERGENCE_PULSES) + GRAND_CONVERGENCE_PULSES) % GRAND_CONVERGENCE_PULSES;
-      const liveLap = lapIndex(masterPulseCount);
-      this._cycleReadout = this._cycleReadout.filter((entry) => {
-        // An entry's angular position within ITS OWN lap is fixed the
-        // moment that lap completes (lapsAgo >= 1) -- only how far
-        // inward it's coiled keeps changing after that, never where
-        // around the circle it sits.
-        const screenSpoke = 1 + (positionWithinLap(entry.capturedAtPulse) / GRAND_CONVERGENCE_PULSES) * SPOKE_COUNT;
-        const lapsAgo = liveLap - lapIndex(entry.capturedAtPulse);
-        if (lapsAgo > MAX_LAPS_VISIBLE) return false; // coiled past the inner limit -- a real, bounded budget, see this block's own comment
-        const radius = ACTIVE_RADIUS - lapsAgo * SPIRAL_LAP_STEP;
-        // Newest lap brightest, each further-coiled lap dimmer -- the
-        // same eased fade-with-depth shape the hull's own frozen copies
-        // use, just driven by completed LAPS instead of elapsed time.
-        const alpha = Math.pow(1 - lapsAgo / (MAX_LAPS_VISIBLE + 1), 2);
-        ctx.fillStyle = WHEEL_PALETTE.label;
-        ctx.globalAlpha = alpha;
-        const p = spokePoint(screenSpoke, radius, cx, cy);
+      ctx.fillStyle = WHEEL_PALETTE.label;
+      for (const entry of this._cycleReadout) {
+        const screenSpoke = 1 + ((entry.capturedAtPulse - seriesStartPulse) / seriesTotalMasterPulses) * SPOKE_COUNT;
+        const p = spokePoint(screenSpoke, ACTIVE_RADIUS, cx, cy);
         drawRadialGlyph(ctx, [entry.letter], p.x, p.y, screenSpoke, this._cycleReadoutHeightPx);
-        ctx.globalAlpha = 1;
-        return true;
-      });
+      }
     }
 
     // Engraved-bezel segment dividers -- "the rings and their symbol
@@ -1728,6 +1759,39 @@ export class WheelView {
           ctx.fillStyle = "#f4ead0";
           drawRadialGlyph(ctx, [fc.letters[i]], pt.x, pt.y, s - fc.rotationAtCapture, this._hullHeightPx);
         });
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Pushed-out marquee rings -- "this ring can be pushed outwards and a
+    // new one can be started on completion in the same standing-echo-push
+    // convention we're already using" (see resetCycleReadoutSeries).
+    // Genuinely rare (once per whole transposition series, not once per
+    // hit) and genuinely leaving the wheel's own frame as it's pushed --
+    // same "a rare real event reads as breaking free of the wheel's own
+    // frame" exemption the master hull's pass/burst waves get, drawn
+    // unclipped here alongside them rather than in the earlier clipped
+    // ambient-texture section. Each generation eases toward its own
+    // authoritative rank exactly like `_standingGenerations` above
+    // (`_standingDepth`), just OUTWARD only (per the request, not the
+    // mirrored in+out pair that mechanic uses for the per-ring tunnel),
+    // and fading the same exponential-decay way.
+    this._readoutGenerations = this._readoutGenerations.filter(
+      (gen) => this._viewParams.standingBaseAlpha * Math.exp(-Math.max(0, this._standingDepth(gen, now)) * this._viewParams.standingFadeRate) > 0.008
+    );
+    const READOUT_PUSH_STEP = 16 * scale;
+    for (const gen of this._readoutGenerations) {
+      const depth = this._standingDepth(gen, now);
+      if (depth < -0.98) continue; // still peeling off the active ring, nothing to show yet
+      const alpha = this._viewParams.standingBaseAlpha * Math.exp(-Math.max(0, depth) * this._viewParams.standingFadeRate);
+      if (alpha <= 0.008) continue;
+      const r = (outerR + 88 * scale + (depth + 1) * READOUT_PUSH_STEP) * breathPulse;
+      ctx.font = `${this._cycleReadoutHeightPx}px sans-serif`;
+      ctx.fillStyle = WHEEL_PALETTE.label;
+      ctx.globalAlpha = alpha;
+      for (const entry of gen.entries) {
+        const p = spokePoint(entry.screenSpoke, r, cx, cy);
+        drawRadialGlyph(ctx, [entry.letter], p.x, p.y, entry.screenSpoke, this._cycleReadoutHeightPx);
       }
       ctx.globalAlpha = 1;
     }

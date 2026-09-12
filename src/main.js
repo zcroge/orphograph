@@ -557,19 +557,98 @@ renderResponseSteps();
 let transpositionEnabled = true;
 let transpositionStepSpokes = ROTATION_SPOKE_SHIFT;
 let transpositionOffsetSpokes = 0;
-// How many real transposition steps have advanced since the current
-// series began -- "at the FULL (all cyclic transposition steps
-// included) timescale, all the way back to the first transposition in
-// the full series." Counts real advanceTransposition() calls, not
-// elapsed time; reset on Play (a fresh phrase starts a fresh series,
-// same reasoning as every other Play-scoped reset below) and whenever
-// the step-size slider changes (a different step size invalidates
-// however far the current series had progressed toward closing).
-// Compared each step against wheel.js's own transpositionCycleSteps --
-// the real, discrete "the series has closed and returned to its own
-// starting offset" event -- to reset the procession-history spiral
-// (view.js's resetCycleReadoutSeries) for a fresh coil.
-let transpositionStepCount = 0;
+
+// "A continuous marquee... resulting in a full, unbroken ring when the
+// full cyclic procession (standard 12 transpositions) is completed."
+// The marquee's own single revolution has to span exactly one full
+// transposition series, not a fixed wall-clock duration -- these two
+// values are the "clock" main.js hands to view.js's render() for that
+// (seriesStartPulse is the raw sequencer.masterPulseCount baseline the
+// series began at; seriesTotalMasterPulses is how many master pulses
+// the WHOLE series takes to close). Both reset together, see
+// recomputeSeriesTotalPulses below.
+let seriesStartPulse = 0;
+let seriesTotalMasterPulses = GRAND_CONVERGENCE_PULSES; // sane pre-Play fallback, replaced the instant Play computes the real value
+
+// A transposition SERIES closes after exactly transpositionCycleSteps
+// real given-ring laps (wheel.js's own formula) -- and, critically,
+// every one of those laps takes the exact SAME number of master pulses:
+// the given ring always sweeps the SAME trace at the SAME fixed pulse
+// rate (transposedSpoke only ever changes pitch, never the ring's own
+// spoke-traversal timing), so "one given-ring lap" is a static property
+// of the trace itself, fully computable the instant a phrase loads --
+// no need to wait and measure it from real playback. Mirrors
+// sequencer.js's own private RingRunner timing rules by hand (same
+// "kept in sync by hand" precedent as wordHandedness above), since
+// those aren't exported: melody mode costs shortest-arc pulses between
+// every consecutive pair of trace entries (rests included -- every
+// entry, rest or real, is still a real spoke-arrival the ring must
+// physically travel to, see RingRunner's own traceIndex advance),
+// summed all the way around back to the start; chord mode costs
+// chordPulseLength(word) per word instead (RingRunner._strikeWord),
+// summed over every word.
+const MIN_CHORD_PULSES = 4; // sequencer.js's own private constant, duplicated -- see this block's own comment
+function wordArcForLap(word) {
+  let total = 0;
+  for (let i = 0; i < word.length - 1; i++) {
+    const d = Math.abs(word[i].spoke - word[i + 1].spoke) % SPOKE_COUNT;
+    total += Math.min(d, SPOKE_COUNT - d);
+  }
+  return total;
+}
+function chordPulseLengthForLap(word) {
+  return Math.max(MIN_CHORD_PULSES, wordArcForLap(word));
+}
+function computeGivenLapRingPulses() {
+  if (ringPerformanceMode.given !== "melody") {
+    // Chord/arpeggio timing -- both map to sequencer.js's "chord" mode
+    // (see applyRingPerformanceMode), same per-word arc timing either way.
+    return currentWords.reduce((sum, w) => sum + chordPulseLengthForLap(w), 0) || SPOKE_COUNT;
+  }
+  if (currentTrace.length === 0) return SPOKE_COUNT; // degenerate guard, never actually reachable (Play requires real input)
+  let total = 0;
+  for (let i = 0; i < currentTrace.length; i++) {
+    const a = currentTrace[i].spoke;
+    const b = currentTrace[(i + 1) % currentTrace.length].spoke;
+    const d = Math.abs(a - b) % SPOKE_COUNT;
+    total += Math.min(d, SPOKE_COUNT - d);
+  }
+  return total || SPOKE_COUNT;
+}
+// Converts the given ring's own RING-pulse lap length into MASTER
+// pulses (the two differ by exactly ringSpeedMultiplier("given"), the
+// same conversion every other ring-relative timing figure in this file
+// already uses), then multiplies by however many such laps the CURRENT
+// step size needs to close a full series. Called at Play and every time
+// a series actually closes or restarts (the step-size slider changing
+// mid-series) -- see those call sites.
+function recomputeSeriesTotalPulses() {
+  const givenLapMasterPulses = computeGivenLapRingPulses() / ringSpeedMultiplier("given");
+  seriesTotalMasterPulses = givenLapMasterPulses * transpositionCycleSteps(transpositionStepSpokes);
+}
+// The actual "has the series closed" check -- called once per animation
+// frame (see render() below), not from a discrete per-step counter.
+// Counting real advanceTransposition() calls and comparing against
+// transpositionCycleSteps was the first approach tried here, but it (a)
+// silently never closes at all when transposition is disabled (
+// advanceTransposition is never even called then -- no series would ever
+// push out, growing the readout unboundedly for as long as Play runs),
+// and (b) is really just a more roundabout way of asking the exact same
+// question this already answers directly: masterPulseCount and the given
+// ring's own pulse accumulator are driven by the identical per-frame dt
+// (Sequencer.tick), so they stay in the fixed ringSpeedMultiplier("given")
+// ratio to arbitrary precision -- "N real transposition steps have
+// elapsed" and "N * givenLapMasterPulses master pulses have elapsed" are
+// the same real-world moment. Using elapsed pulses directly handles the
+// transposition-disabled case for free (no special-casing: it just keeps
+// completing nominal "editions" at the current step-size's own implied
+// pace) instead of leaving it as a silent gap.
+function checkSeriesClosed() {
+  if (sequencer.masterPulseCount - seriesStartPulse < seriesTotalMasterPulses) return;
+  view.resetCycleReadoutSeries();
+  seriesStartPulse += seriesTotalMasterPulses; // advance by the exact interval just closed, not "now" -- keeps long sessions from drifting
+  recomputeSeriesTotalPulses(); // the trace/step-size may have changed since this series began
+}
 // Real bug, root cause of "instant jumps": advanceTransposition used to
 // glide directly between two WRAPPED (0-11) offsets. Whenever
 // old+step >= 12, the wrapped `newOffset` can be numerically LESS than
@@ -629,15 +708,10 @@ function advanceTransposition() {
   // into the tunnel and clear it, so new drawing starts fresh under the
   // new transposition state.
   view.retireTrace();
-  // "All the way back to the first transposition/transform in the full
-  // series" -- a real step just happened; count it, and check whether
-  // the series has now closed (returned to its own starting offset) --
-  // see transpositionStepCount's own comment above.
-  transpositionStepCount += 1;
-  if (transpositionStepCount >= transpositionCycleSteps(transpositionStepSpokes)) {
-    transpositionStepCount = 0;
-    view.resetCycleReadoutSeries();
-  }
+  // The marquee's own series-closed check (checkSeriesClosed, called every
+  // frame from render()) is what actually pushes the readout ring out and
+  // starts a fresh one -- see its own comment for why this doesn't also
+  // need to watch for that here.
 }
 
 // Interpolated offset for the revolving ring, glided over one GIVEN-ring
@@ -650,11 +724,14 @@ $("transposition-step").addEventListener("input", (e) => {
   const v = parseInt(e.target.value, 10);
   transpositionStepSpokes = Number.isFinite(v) ? Math.max(1, Math.min(11, v)) : ROTATION_SPOKE_SHIFT;
   // A different step size changes what "the series" even means (a new
-  // transpositionCycleSteps target) -- whatever count the old series had
-  // reached no longer means anything against it, so start counting a
-  // fresh series rather than comparing progress made under one step size
-  // against a different size's own closure target.
-  transpositionStepCount = 0;
+  // transpositionCycleSteps target, and a different total marquee-ring
+  // revolution length) -- whatever ring the old series had built up no
+  // longer means anything against it, so push what's there out as a
+  // standing echo (same as a real series closing -- the work already
+  // played is still worth keeping) and start a fresh series.
+  view.resetCycleReadoutSeries();
+  seriesStartPulse = sequencer.masterPulseCount;
+  recomputeSeriesTotalPulses();
 });
 
 function transpositionGlideProgress() {
@@ -1162,15 +1239,19 @@ function render() {
   // engine has never done and has no infrastructure for) -- an honest
   // "same rate," not a fabricated decorative wobble.
   const droneBreathHz = sequencer.pulsesPerSecond / audio.droneParams.breathPulsesPerCycle;
+  checkSeriesClosed();
   view.render({
     ringLabelsAtSpoke, transposition, hullCursorByRing, ringHitFlash,
     masterRotationOffset: dialOffset(rimDial), ringDialOffsets, droneBreathHz,
-    // "A continuous outer ring that slowly makes a turn per full
-    // operation procession cycle" -- the cycle-readout ring's own
-    // rotation. Same "main.js computes the live clock value, view.js only
-    // renders it" split every other continuous motion here already uses
-    // (transposition's own glide progress, the phase-bar cursors above).
+    // "A continuous marquee... resulting in a full, unbroken ring when
+    // the full cyclic procession... is completed." Same "main.js computes
+    // the live clock value(s), view.js only renders them" split every
+    // other continuous motion here already uses (transposition's own
+    // glide progress, the phase-bar cursors above) -- see
+    // recomputeSeriesTotalPulses's own comment for what these two mean.
     masterPulseCount: sequencer.masterPulseCountFractional,
+    seriesStartPulse,
+    seriesTotalMasterPulses,
   });
 }
 render();
@@ -1317,7 +1398,6 @@ $("play").addEventListener("click", () => {
     // not a standing global state that survives retyping.
     transpositionOffsetSpokes = 0;
     transpositionOffsetUnwrapped = 0;
-    transpositionStepCount = 0;
     transpositionGlide = { fromOffset: 0, toOffset: 0, startedAt: performance.now() };
     audio.setTranspositionOffset(0);
     if ($("chamber-follows-input").checked) {
@@ -1342,6 +1422,12 @@ $("play").addEventListener("click", () => {
     for (const w of currentWords) for (const e of w) wordOfEntry.set(e, w);
     lastFluteWordByRing.given = lastFluteWordByRing.received = lastFluteWordByRing.made = null;
     hullCursor.given = hullCursor.received = hullCursor.made = null;
+    // The marquee's own "one revolution" clock -- a fresh phrase means a
+    // fresh trace, which can genuinely change the given ring's own real
+    // lap length (see computeGivenLapRingPulses), so this has to be
+    // recomputed every Play, not just once at module load.
+    seriesStartPulse = sequencer.masterPulseCount;
+    recomputeSeriesTotalPulses();
     // Master hull -- the whole phrase's own shape (every non-rest letter,
     // in order, regardless of which ring ends up voicing it), so a word
     // whose letters disperse across all three tiers still shows a real
