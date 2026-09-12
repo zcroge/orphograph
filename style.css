@@ -40,15 +40,58 @@ h1 { font-size: 20px; margin: 0 0 16px; color: var(--text); }
   flex-wrap: wrap;
 }
 
+/* position: sticky removed here -- a real bug found while making the
+   wheel bigger, not a stylistic choice. .wheel-frame is now tall enough
+   (canvas + legend) to exceed a typical viewport height in advanced
+   mode, and a sticky element that tall visually overlaps/intercepts
+   clicks meant for whatever page content (e.g. the keyboard section
+   below .layout) has scrolled into the same screen region -- confirmed
+   directly: the on-screen keyboard's own click-to-insert broke under
+   Playwright with "canvas#wheel intercepts pointer events" until this
+   was removed. Sticky's own remaining benefit was marginal anyway --
+   .panel already scrolls WITHIN itself (its own overflow-y:auto), so the
+   wheel staying visible while browsing panel content never depended on
+   page-level stickiness in the normal (unwrapped) desktop layout this
+   sizes for. */
 .wheel-frame {
   flex: 0 0 auto;
-  position: sticky;
-  top: 24px;
 }
 
+/* "Make the orphograph display itself larger, it's the focal point of our
+   whole build." A real CSS size (was previously undefined -- the canvas
+   just rendered at its bare width="700" height="700" HTML attributes,
+   with nothing to make it bigger or responsive). Floor matches today's
+   size exactly (no regression on a small window); ceiling is ~50%
+   bigger. Sized off viewport HEIGHT, not width or vmin -- this layout's
+   width already has slack (.panel can flex down to 480px, and .layout
+   wraps if it doesn't fit), so height is the real constraint on a
+   typical wide browser window; vmin would be dominated by that same
+   height on any wide-than-tall window anyway, but bottoms out at the
+   700px floor far too easily (measured: 60vmin on a 1600x1000 viewport
+   is only 600px, already below the floor). aspect-ratio keeps it square
+   so main.js's ResizeObserver always reports equal width/height to
+   WheelView.resize(). The canvas's own JS-driven backing-store size
+   (see view.js's resize()) is what actually determines drawing
+   resolution/crispness -- this CSS only sets the on-screen box size. */
+#wheel {
+  display: block;
+  width: clamp(700px, 85vh, 1050px);
+  aspect-ratio: 1;
+}
+
+/* Capped, not left to fill .wheel-frame's own (now much wider, up to
+   1050px) width -- a real regression found while making the wheel
+   bigger: an uncapped 8-column grid stretching to match the wheel's new
+   width ballooned each of the 39 legend cells to ~95px+ (real
+   letterforms don't need to be anywhere near that big for a quick-
+   reference key), pushing .wheel-frame's total height (canvas + this
+   grid) well past a typical viewport height and causing its own
+   position:sticky to visually overlap the keyboard section below. A
+   capped column width keeps this a compact reference strip regardless
+   of how big the wheel itself gets. */
 .legend-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(8, minmax(0, 60px));
   gap: 3px;
   margin-top: 10px;
 }

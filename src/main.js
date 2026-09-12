@@ -165,6 +165,17 @@ $("delete-phrase").addEventListener("click", () => {
 
 const canvas = $("wheel");
 const view = new WheelView(canvas);
+// "Make the orphograph display itself larger, it's the focal point of our
+// whole build." The constructor already sizes the wheel once from the
+// canvas's real current CSS size (see view.js's resize()); this keeps it
+// in sync afterward -- window resize, browser zoom, or (built so it
+// reuses cleanly) a future fullscreen mode, since fullscreen is just
+// another container size for this same observer to react to. contentRect
+// is already border-box-exclusive CSS pixels, exactly what resize() wants.
+new ResizeObserver((entries) => {
+  const { width, height } = entries[0].contentRect;
+  if (width > 0 && height > 0) view.resize(width, height);
+}).observe(canvas);
 const audio = new OrphographAudio();
 function insertLetter(letter) {
   const input = $("input");

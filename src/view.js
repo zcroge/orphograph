@@ -240,12 +240,19 @@ const TRANSPOSITION_MARKER_COLOR = "#b98cff";
 // where that ring's own moving position marker renders (ring mid-radius).
 const RING_LABEL_BAND_FRACTION = 0.72;
 
+// The original, hand-tuned design this whole file's proportions were
+// built against: a 700x700 canvas, margin 94px, outerR 256px (so
+// Math.min(cx,cy) was 350). See resize()'s own comment -- every new size
+// is expressed as a uniform scale factor against THESE three numbers, so
+// growing the wheel is the same picture, uniformly bigger, not a
+// re-derivation of its proportions.
+const BASE_HALF_EXTENT = 350;
+const BASE_OUTER_R = 256;
+
 export class WheelView {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
-    this.cx = canvas.width / 2;
-    this.cy = canvas.height / 2;
     this._viewParams = { ...DEFAULT_VIEW_PARAMS };
     // Was 24 (canvas 560x560) -- already over-subscribed even before the
     // transposition ring (unassigned-letter label circles already reached
@@ -257,7 +264,16 @@ export class WheelView {
     // the given ring's own outer edge, and every existing radius that's a
     // fraction of it -- at the EXACT SAME 256px it always was, so nothing
     // about the diagram's own existing size/proportions changes.
-    this.outerR = Math.min(this.cx, this.cy) - 94;
+    //
+    // "It's the focal point of our whole build" -- that 700x700/256px
+    // design is now just the BASE case (see BASE_HALF_EXTENT/BASE_OUTER_R
+    // above); resize() (below) recomputes everything from the canvas's
+    // real current CSS size instead of reading fixed canvas.width/height
+    // once here, so the wheel can actually grow (see main.js's
+    // ResizeObserver) and stay crisp (real devicePixelRatio-aware backing-
+    // store sizing, not a CSS stretch of the same fixed raster) --
+    // infrastructure that plainly didn't exist before this round.
+    this.resize(canvas.clientWidth || canvas.width, canvas.clientHeight || canvas.height);
     this.masterHull = [];
     this.masterHullLetters = [];
     // "There should be some level of flat-plane persistence to give a
@@ -384,6 +400,64 @@ export class WheelView {
     // per-ring stamp) gets copied here, frozen, to linger and fade on its
     // own -- distinct from the brief travelling pass that spawned it.
     this._hullFrozenCopies = [];
+  }
+
+  // Real resize infrastructure -- "make the orphograph display itself
+  // larger, it's the focal point of our whole build." Before this round
+  // there was none anywhere: the constructor read canvas.width/height
+  // ONCE and never again, so changing CSS size alone would just blurrily
+  // stretch the same fixed 700x700 raster, no new detail. Called by the
+  // constructor once, and by main.js's ResizeObserver on every real size
+  // change afterward (window resize, zoom, and -- built so it reuses
+  // cleanly -- a future fullscreen mode, since fullscreen is just another
+  // container size for that same observer to react to).
+  //
+  // Real devicePixelRatio-aware backing-store sizing, not a CSS stretch:
+  // ONLY canvas.width/height (the backing store, a DOM property -- an
+  // integer pixel count for the drawing buffer, not a style) is set here,
+  // to cssSize*dpr. A real bug found while building this: setting
+  // canvas.style.width/height too seemed harmless (matches the CSS size
+  // at the moment it's set) but is NOT -- an inline style always wins
+  // over the external stylesheet's own #wheel{width:clamp(...)} rule for
+  // every future layout, so the FIRST resize() call would permanently
+  // freeze the canvas's on-screen size at whatever it was that one time,
+  // silently breaking the whole responsive/shrink-on-narrow-viewport
+  // behavior clamp() is there for. CSS alone owns the on-screen box size;
+  // this method only ever reads it (via the cssWidth/cssHeight the
+  // caller already measured, e.g. main.js's ResizeObserver) and reacts.
+  // A single ctx.setTransform(dpr,...) means every existing drawing call
+  // (already written in plain CSS-pixel coordinates throughout this
+  // file) keeps working completely unchanged; nothing downstream needs
+  // to know dpr exists.
+  //
+  // The scale factor is derived from the ORIGINAL hand-tuned design (a
+  // 700x700 canvas, margin 94, outerR 256 -- so Math.min(cx,cy) was 350,
+  // see BASE_HALF_EXTENT/BASE_OUTER_R above), not re-derived from
+  // scratch, so growing the wheel is the SAME picture, uniformly bigger --
+  // every ring/band radius elsewhere in this file is already a fraction
+  // of outerR and scales for free; this._scale additionally drives the
+  // handful of literal-pixel decorations that don't (label/hull-trace
+  // font sizes -- see their own call sites) so those grow with everything
+  // else instead of becoming proportionally tinier on a much bigger wheel.
+  resize(cssWidth, cssHeight) {
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.round(cssWidth * dpr);
+    this.canvas.height = Math.round(cssHeight * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    this.cx = cssWidth / 2;
+    this.cy = cssHeight / 2;
+    const scale = Math.min(this.cx, this.cy) / BASE_HALF_EXTENT;
+    this._scale = scale;
+    this.outerR = scale * BASE_OUTER_R;
+
+    // Precomputed once here (not recomputed inline at every render()
+    // call site) -- same values the per-ring spoke-label loop and the
+    // hull-trace loops already used as bare literals before this round
+    // (16/17px labels, 13px hull trace), just scaled now.
+    this._labelHeightPx = 16 * scale;
+    this._poleLabelHeightPx = 17 * scale;
+    this._hullHeightPx = 13 * scale;
   }
 
   reset() {
@@ -906,6 +980,7 @@ export class WheelView {
 
   render({ ringLabelsAtSpoke, transposition, hullCursorByRing, ringHitFlash, masterRotationOffset, ringDialOffsets, droneBreathHz = 0 }) {
     const { ctx, cx, cy, outerR } = this;
+    const scale = this._scale;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
     // Ring boundaries -- engraved lines, not a color wash. Drawn at each
@@ -1095,16 +1170,16 @@ export class WheelView {
         const ringOffset = ringDialOffsets?.[ring.name] || 0;
         const bandR = outerR * (ring.rFrom + RING_LABEL_BAND_FRACTION * (ring.rTo - ring.rFrom));
         const p = spokePoint(s - ringOffset, bandR, cx, cy);
-        const labelHeightPx = isPole(s) ? 17 : 16;
-        ctx.font = isPole(s) ? "bold 17px sans-serif" : "16px sans-serif";
+        const labelHeightPx = isPole(s) ? this._poleLabelHeightPx : this._labelHeightPx;
+        ctx.font = isPole(s) ? `bold ${labelHeightPx}px sans-serif` : `${labelHeightPx}px sans-serif`;
         ctx.fillStyle = WHEEL_PALETTE.label;
         drawRadialGlyph(ctx, letters, p.x, p.y, s - ringOffset, labelHeightPx);
       }
       if (groups.unassigned && groups.unassigned.length) {
-        const p = spokePoint(s - rimOffset, outerR + 26, cx, cy);
-        const unassignedHeightPx = isPole(s) ? 17 : 16;
-        ctx.font = isPole(s) ? "italic bold 17px sans-serif" : "italic 16px sans-serif";
-        const circumR = Math.max(11, radialGlyphWidth(ctx, groups.unassigned, unassignedHeightPx) / 2 + 6);
+        const p = spokePoint(s - rimOffset, outerR + 26 * scale, cx, cy);
+        const unassignedHeightPx = isPole(s) ? this._poleLabelHeightPx : this._labelHeightPx;
+        ctx.font = isPole(s) ? `italic bold ${unassignedHeightPx}px sans-serif` : `italic ${unassignedHeightPx}px sans-serif`;
+        const circumR = Math.max(11 * scale, radialGlyphWidth(ctx, groups.unassigned, unassignedHeightPx) / 2 + 6 * scale);
         ctx.beginPath();
         ctx.arc(p.x, p.y, circumR, 0, Math.PI * 2);
         ctx.setLineDash([2, 3]);
@@ -1118,15 +1193,15 @@ export class WheelView {
       if (!Object.keys(groups).length) {
         // No table entry at all for this spoke -- fall back to the raw
         // number so an empty spoke still reads as something.
-        const p = spokePoint(s - rimOffset, outerR + 18, cx, cy);
+        const p = spokePoint(s - rimOffset, outerR + 18 * scale, cx, cy);
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, 10 * scale, 0, Math.PI * 2);
         ctx.setLineDash([2, 3]);
         ctx.strokeStyle = WHEEL_PALETTE.structureDim;
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.fillStyle = WHEEL_PALETTE.emptySpokeNumber;
-        ctx.font = isPole(s) ? "bold 13px sans-serif" : "12px sans-serif";
+        ctx.font = isPole(s) ? `bold ${13 * scale}px sans-serif` : `${12 * scale}px sans-serif`;
         drawRadialText(ctx, String(s), p.x, p.y, s - rimOffset);
       }
     }
@@ -1549,13 +1624,13 @@ export class WheelView {
         ctx.stroke();
         ctx.setLineDash([]);
         if (this.masterHullLetters.length === this.masterHull.length) {
-          ctx.font = "13px sans-serif";
+          ctx.font = `${this._hullHeightPx}px sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           this.masterHull.forEach((s, i) => {
             const pt = spokePoint(s - age.rimOffsetAtCapture, r, cx, cy);
             ctx.fillStyle = "#f4ead0";
-            drawRadialGlyph(ctx, [this.masterHullLetters[i]], pt.x, pt.y, s - age.rimOffsetAtCapture, 13);
+            drawRadialGlyph(ctx, [this.masterHullLetters[i]], pt.x, pt.y, s - age.rimOffsetAtCapture, this._hullHeightPx);
           });
         }
         ctx.globalAlpha = 1;
@@ -1588,13 +1663,13 @@ export class WheelView {
       ctx.stroke();
       ctx.setLineDash([]);
       if (fc.letters.length === fc.spokes.length) {
-        ctx.font = "13px sans-serif";
+        ctx.font = `${this._hullHeightPx}px sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         fc.spokes.forEach((s, i) => {
           const pt = spokePoint(s - fc.rotationAtCapture, r, cx, cy);
           ctx.fillStyle = "#f4ead0";
-          drawRadialGlyph(ctx, [fc.letters[i]], pt.x, pt.y, s - fc.rotationAtCapture, 13);
+          drawRadialGlyph(ctx, [fc.letters[i]], pt.x, pt.y, s - fc.rotationAtCapture, this._hullHeightPx);
         });
       }
       ctx.globalAlpha = 1;
