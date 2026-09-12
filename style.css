@@ -376,6 +376,9 @@ label.inline {
 .kbd-row-unassigned .kbd-cell { background: transparent; border: 1px dashed var(--border); }
 .kbd-key {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
   padding: 3px 4px;
   border: 1px solid var(--border);
@@ -390,6 +393,7 @@ label.inline {
   text-overflow: ellipsis;
   transition: background 120ms, box-shadow 120ms;
 }
+.kbd-key svg, .legend-key svg { display: block; }
 .kbd-shorthand {
   position: absolute;
   top: -5px;

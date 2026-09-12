@@ -9,6 +9,7 @@
 
 import { PLACEHOLDER_SPOKE_OF, ringForLetter, REST, TYPED_AS_OF } from "./letters.js";
 import { LEGEND_OF } from "./glyphLegend.js";
+import { hasGlyph, glyphSVGMarkup } from "./glyphRender.js";
 
 const RING_ACCENT = {
   given: "#c9a227",
@@ -47,7 +48,9 @@ export class CompactLegend {
       cell.type = "button";
       cell.className = "legend-key";
       cell.style.setProperty("--accent", RING_ACCENT[ring]);
-      cell.textContent = DISPLAY_LABEL[letter] || letter;
+      const svg = hasGlyph(letter) ? glyphSVGMarkup(letter, { heightPx: 26 }) : null;
+      if (svg) cell.innerHTML = svg;
+      else cell.textContent = DISPLAY_LABEL[letter] || letter;
       cell.dataset.letter = letter;
 
       const legend = LEGEND_OF[letter];

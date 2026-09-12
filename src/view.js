@@ -47,6 +47,7 @@ const WHEEL_PALETTE = {
 };
 
 import { SPOKE_COUNT, RINGS, spokePoint, spokeAngle, isPole, rotateSpoke } from "./wheel.js";
+import { hasGlyph, glyphBBox, drawGlyph } from "./glyphRender.js";
 
 // "Granular parametric control over the visuals now, especially the echo
 // settings." Every number here has a real, currently-hardcoded twin
@@ -150,6 +151,65 @@ function drawRadialText(ctx, text, x, y, effectiveSpoke) {
   ctx.rotate(spokeAngle(effectiveSpoke));
   ctx.fillText(text, 0, 0);
   ctx.restore();
+}
+
+// Real hand-drawn letterforms (baked from a glyph-studio export, see
+// tools/import-glyphs.mjs/src/glyphData.js), sibling to drawRadialText
+// above and falling back to it token-by-token for anything not yet
+// drawn -- so a phrase mixing drawn and undrawn letters (real today,
+// while coverage is partial) reads as glyph+text side by side rather
+// than breaking. `tokens` is an array (a single-letter label just
+// passes a 1-element array) since a spoke can carry more than one
+// letter (e.g. a rotation-twin pair sharing a spoke) -- laid out
+// left-to-right and centered as a whole around (x,y), the same overall
+// centering `ctx.textAlign = "center"` gave the old joined-string
+// version. Caller still sets ctx.font (for the text-fallback path) and
+// ctx.fillStyle (used for both text and glyph fill) beforehand, exactly
+// as it already did for drawRadialText -- this doesn't touch either.
+// A thin "/" still separates adjacent letters sharing one spoke label --
+// the same separator the old `letters.join("/")` string always drew --
+// regardless of whether either side ends up a real glyph or a text
+// fallback, so a still-undrawn pair (most tokens sharing a spoke, while
+// coverage is partial) doesn't visually run together the way two bare
+// fillText calls back to back would.
+const RADIAL_GLYPH_SEP = "/";
+function drawRadialGlyph(ctx, tokens, x, y, effectiveSpoke, heightPx) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(spokeAngle(effectiveSpoke));
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  const PAD = heightPx * 0.15;
+  const sepWidth = tokens.length > 1 ? ctx.measureText(RADIAL_GLYPH_SEP).width : 0;
+  const widths = tokens.map((t) => (hasGlyph(t) ? (glyphBBox(t).width / 1200) * heightPx : ctx.measureText(t).width));
+  const totalWidth = widths.reduce((a, b) => a + b, 0) + (sepWidth + PAD * 2) * Math.max(0, tokens.length - 1);
+  let cursorX = -totalWidth / 2;
+  tokens.forEach((t, i) => {
+    const w = widths[i];
+    if (hasGlyph(t)) drawGlyph(ctx, t, { x: cursorX + w / 2, y: 0, heightPx });
+    else ctx.fillText(t, cursorX, 0);
+    cursorX += w;
+    if (i < tokens.length - 1) {
+      cursorX += PAD;
+      ctx.fillText(RADIAL_GLYPH_SEP, cursorX, 0);
+      cursorX += sepWidth + PAD;
+    }
+  });
+  ctx.restore();
+}
+
+// Total on-screen width `drawRadialGlyph` above would actually draw
+// `tokens` at, in px -- the ctx.measureText(joinedLabel).width
+// replacement for anything sizing itself around a label (e.g. the
+// unassigned-ring dashed circle below), since a vector glyph has no
+// measureText equivalent of its own. Needs the SAME ctx (for the
+// text-fallback measurement path and whatever ctx.font is currently
+// set) but doesn't draw anything.
+function radialGlyphWidth(ctx, tokens, heightPx) {
+  const PAD = heightPx * 0.15;
+  const sepWidth = tokens.length > 1 ? ctx.measureText(RADIAL_GLYPH_SEP).width : 0;
+  const widths = tokens.map((t) => (hasGlyph(t) ? (glyphBBox(t).width / 1200) * heightPx : ctx.measureText(t).width));
+  return widths.reduce((a, b) => a + b, 0) + (sepWidth + PAD * 2) * Math.max(0, tokens.length - 1);
 }
 
 // Ring hues are law-declared (00-laws.md/lexicon: given=yellow, received=
@@ -1035,16 +1095,16 @@ export class WheelView {
         const ringOffset = ringDialOffsets?.[ring.name] || 0;
         const bandR = outerR * (ring.rFrom + RING_LABEL_BAND_FRACTION * (ring.rTo - ring.rFrom));
         const p = spokePoint(s - ringOffset, bandR, cx, cy);
-        const label = letters.join("/");
+        const labelHeightPx = isPole(s) ? 11 : 10;
         ctx.font = isPole(s) ? "bold 11px sans-serif" : "10px sans-serif";
         ctx.fillStyle = WHEEL_PALETTE.label;
-        drawRadialText(ctx, label, p.x, p.y, s - ringOffset);
+        drawRadialGlyph(ctx, letters, p.x, p.y, s - ringOffset, labelHeightPx);
       }
       if (groups.unassigned && groups.unassigned.length) {
         const p = spokePoint(s - rimOffset, outerR + 26, cx, cy);
-        const label = groups.unassigned.join("/");
+        const unassignedHeightPx = isPole(s) ? 11 : 10;
         ctx.font = isPole(s) ? "italic bold 11px sans-serif" : "italic 10px sans-serif";
-        const circumR = Math.max(11, ctx.measureText(label).width / 2 + 6);
+        const circumR = Math.max(11, radialGlyphWidth(ctx, groups.unassigned, unassignedHeightPx) / 2 + 6);
         ctx.beginPath();
         ctx.arc(p.x, p.y, circumR, 0, Math.PI * 2);
         ctx.setLineDash([2, 3]);
@@ -1053,7 +1113,7 @@ export class WheelView {
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.fillStyle = WHEEL_PALETTE.labelUnassigned;
-        drawRadialText(ctx, label, p.x, p.y, s - rimOffset);
+        drawRadialGlyph(ctx, groups.unassigned, p.x, p.y, s - rimOffset, unassignedHeightPx);
       }
       if (!Object.keys(groups).length) {
         // No table entry at all for this spoke -- fall back to the raw
@@ -1495,7 +1555,7 @@ export class WheelView {
           this.masterHull.forEach((s, i) => {
             const pt = spokePoint(s - age.rimOffsetAtCapture, r, cx, cy);
             ctx.fillStyle = "#f4ead0";
-            drawRadialText(ctx, this.masterHullLetters[i], pt.x, pt.y, s - age.rimOffsetAtCapture);
+            drawRadialGlyph(ctx, [this.masterHullLetters[i]], pt.x, pt.y, s - age.rimOffsetAtCapture, 9);
           });
         }
         ctx.globalAlpha = 1;
@@ -1534,7 +1594,7 @@ export class WheelView {
         fc.spokes.forEach((s, i) => {
           const pt = spokePoint(s - fc.rotationAtCapture, r, cx, cy);
           ctx.fillStyle = "#f4ead0";
-          drawRadialText(ctx, fc.letters[i], pt.x, pt.y, s - fc.rotationAtCapture);
+          drawRadialGlyph(ctx, [fc.letters[i]], pt.x, pt.y, s - fc.rotationAtCapture, 9);
         });
       }
       ctx.globalAlpha = 1;

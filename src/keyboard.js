@@ -5,18 +5,20 @@
 // engine itself plays from, not a hand-kept duplicate -- it can't drift
 // from what the wheel actually does.
 //
-// Every key is a placeholder Latin-label tile today: no glyph has been
-// drawn yet (01-alphabet/letters/README.md says so directly). Each key
-// still carries the expected future asset paths (Krita/Inkscape sketch,
-// UFO glyph) in its tooltip -- not real links yet, since nothing exists at
-// either path, but fixing the convention now means a real glyph just
-// starts appearing there once someone exports one, with no code change
-// needed later. The font-master UFO is the implied end state; this is the
-// legend that will eventually point straight at it.
+// A key shows its real hand-drawn glyph once one exists (baked from a
+// glyph-studio export, github.com/zcroge/glyph-studio -- see
+// tools/import-glyphs.mjs/src/glyphData.js/src/glyphRender.js) and falls
+// back to a plain Latin-label tile otherwise. The two tools are
+// deliberately separate, independently-deployed repos -- glyph-studio's
+// own drawn strokes live in the author's browser, not a file this repo
+// could load live -- so "real glyph appears here" means someone ran the
+// import script against a fresh export, not a live link. The tooltip
+// still names the expected UFO glyph slot either way.
 
 import { SPOKE_COUNT } from "./wheel.js";
 import { PLACEHOLDER_SPOKE_OF, ringForLetter, REST, TYPED_AS_OF } from "./letters.js";
 import { LEGEND_OF } from "./glyphLegend.js";
+import { hasGlyph, glyphSVGMarkup } from "./glyphRender.js";
 
 const ROW_ORDER = ["given", "received", "made", "unassigned"];
 const ROW_LABEL = {
@@ -37,14 +39,12 @@ const DISPLAY_LABEL = {
   "vowel.nub": "nub",
 };
 
-// Paths are relative to this file's own served location (this engine's
-// src/), reaching up to the wider TheCodex repo -- this dev server only
-// serves the engine folder today, so these render as plain text, not
-// working links, until asset-serving spans the whole repo.
+// Named for the tooltip only -- not a working link (glyph-studio and
+// this repo are separate, independently-deployed sites; see this file's
+// own header comment for why).
 function expectedPaths(token) {
   const safe = token.replace(/\./g, "_");
   return {
-    sketch: `01-alphabet/letters/${safe}.svg`,
     glyph: `01-alphabet/letters/TheCodex-Draft.ufo/glyphs/${safe}.glif`,
   };
 }
@@ -83,7 +83,9 @@ export class PictographKeyboard {
           const key = document.createElement("button");
           key.type = "button";
           key.className = "kbd-key";
-          key.textContent = DISPLAY_LABEL[letter] || letter;
+          const svg = hasGlyph(letter) ? glyphSVGMarkup(letter, { heightPx: 22 }) : null;
+          if (svg) key.innerHTML = svg;
+          else key.textContent = DISPLAY_LABEL[letter] || letter;
           key.dataset.letter = letter;
 
           const shorthand = TYPED_AS_OF[letter];
@@ -101,8 +103,7 @@ export class PictographKeyboard {
             `${letter} -- ${legendLine}\n` +
             `spoke ${s}, ${ring}` +
             (shorthand ? `\ntype: ${shorthand}` : "") +
-            `\nsketch: ${paths.sketch} (not yet authored)\n` +
-            `glyph: ${paths.glyph} (not yet authored)`;
+            (svg ? `\nglyph: authored (see glyph-studio)` : `\nglyph: ${paths.glyph} (not yet authored)`);
 
           key.addEventListener("click", () => this.onKeyClick?.(letter));
           cell.appendChild(key);
