@@ -25,9 +25,26 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // vector line forms getting a heavier line weight" -- since these are
 // rendered small (a wheel-spoke label, a keyboard key), a thicker
 // stroke reads far more reliably at that scale than the authoring-space
-// weight tuned for a full 1200-unit canvas.
-const GLYPH_BAKE_STROKE_WIDTH = 40;
-const GRID_CENTER = 600; // glyph-studio's own 1200-UPM grid center
+// weight tuned for a full 1200-unit canvas. Raised again (40 -> 58) --
+// "increasing line weight... for all of the hand-drawn vector style
+// glyph forms" -- ~45% heavier still.
+const GLYPH_BAKE_STROKE_WIDTH = 58;
+
+// "Normalizing letter heights/alignments" -- real measured baked heights
+// ranged from 1069 (I) down to 89 (vowel.horizontal) units, a >12x spread
+// even before counting the two smallest as outliers; every OTHER token
+// (real letters/ligatures/compounds) still ranged 326-1069, a real >3x
+// spread on its own. Each such token is rescaled to share one common
+// `max(width, height)` extent -- deliberately the MAX of the two
+// dimensions, not height alone: several of the shortest outliers (K,
+// OO, ŋ) are already-wide, deliberately horizontal letterforms, and
+// scaling those by height alone would blow their width out past 1500
+// units. One uniform factor per glyph, so nothing ever stretches.
+const NORMALIZE_TARGET_EXTENT = 900;
+// The two still-unnamed, unsettled vowel primes -- "leave these two at
+// their current small scale, in case their smallness is deliberate."
+// Skipped entirely (scale factor 1) while every other token normalizes.
+const NORMALIZE_EXEMPT_TOKENS = new Set(["vowel.horizontal", "vowel.nub"]);
 
 function smoothPoints(points) {
   if (points.length < 3) return points;
@@ -69,11 +86,11 @@ function strokeToOutline(points, baseWidth, minWidthFrac = 0.25) {
   return [...left, ...right.reverse()];
 }
 
-function recenter(outline) {
-  return outline.map((p) => ({ x: Math.round((p.x - GRID_CENTER) * 100) / 100, y: Math.round((p.y - GRID_CENTER) * 100) / 100 }));
-}
-
-function bbox(outlines) {
+// Shared min/max walk over any list of outlines (arrays of {x,y} points) --
+// used both to measure a glyph's raw stroke centerlines (to derive its
+// normalization scale) and its final baked outline (to recenter/report
+// GLYPH_BBOX), so the two never drift apart via separate implementations.
+function extentOf(outlines) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const outline of outlines) {
     for (const p of outline) {
@@ -83,6 +100,28 @@ function bbox(outlines) {
       if (p.y > maxY) maxY = p.y;
     }
   }
+  return { minX, minY, maxX, maxY };
+}
+
+// Recenters a glyph's own FINAL outline set on its own ink -- the actual
+// bounding-box center of what got drawn -- rather than the fixed grid
+// constant (600,600) every token used to be centered on regardless of
+// where its own strokes actually sat within that grid. Fixes real
+// per-glyph alignment drift the fixed-origin approach never corrected,
+// for normalized and exempt tokens alike (the two exempt vowel primes
+// still get centered here, they just skip the scale step beforehand).
+function recenterOnOwnInk(outlines) {
+  const { minX, minY, maxX, maxY } = extentOf(outlines);
+  if (minX === Infinity) return outlines;
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  return outlines.map((outline) =>
+    outline.map((p) => ({ x: Math.round((p.x - centerX) * 100) / 100, y: Math.round((p.y - centerY) * 100) / 100 }))
+  );
+}
+
+function bbox(outlines) {
+  const { minX, minY, maxX, maxY } = extentOf(outlines);
   if (minX === Infinity) return { width: 0, height: 0 };
   return { width: Math.round((maxX - minX) * 100) / 100, height: Math.round((maxY - minY) * 100) / 100 };
 }
@@ -100,10 +139,23 @@ const bboxByToken = {};
 let drawnCount = 0;
 for (const [token, rec] of Object.entries(glyphs)) {
   if (!rec.vectorStrokes || rec.vectorStrokes.length === 0) continue;
-  const outlines = rec.vectorStrokes
-    .map((stroke) => recenter(strokeToOutline(stroke, GLYPH_BAKE_STROKE_WIDTH)))
+
+  // Normalization scale, derived from the RAW stroke centerlines (before
+  // strokeToOutline expands them) -- so the shared GLYPH_BAKE_STROKE_WIDTH
+  // above lands at the same relative weight on every normalized glyph,
+  // rather than reading thick on a glyph that got scaled down and thin on
+  // one that got scaled up.
+  const exempt = NORMALIZE_EXEMPT_TOKENS.has(token);
+  const rawExtent = extentOf(rec.vectorStrokes);
+  const rawMax = rawExtent.minX === Infinity ? 0 : Math.max(rawExtent.maxX - rawExtent.minX, rawExtent.maxY - rawExtent.minY);
+  const scale = exempt || rawMax === 0 ? 1 : NORMALIZE_TARGET_EXTENT / rawMax;
+  const scaledStrokes = rec.vectorStrokes.map((stroke) => stroke.map((p) => ({ x: p.x * scale, y: p.y * scale, pressure: p.pressure })));
+
+  const rawOutlines = scaledStrokes
+    .map((stroke) => strokeToOutline(stroke, GLYPH_BAKE_STROKE_WIDTH))
     .filter((o) => o.length >= 3);
-  if (outlines.length === 0) continue;
+  if (rawOutlines.length === 0) continue;
+  const outlines = recenterOnOwnInk(rawOutlines);
   outlinesByToken[token] = outlines;
   bboxByToken[token] = bbox(outlines);
   drawnCount++;
@@ -129,13 +181,20 @@ for (const [token, rec] of Object.entries(glyphs)) {
 const header = `// GENERATED by tools/import-glyphs.mjs from a glyph-studio export
 // (github.com/zcroge/glyph-studio) -- do not hand-edit. Re-run the
 // script against a fresh backup export to update. Coordinates are
-// centered on each glyph's own origin (glyph-studio's grid center,
-// 600,600, subtracted out) at the original 1200-unit-per-em scale, so
-// every letter's own real proportions survive; a renderer applies one
-// shared scale factor (see src/glyphRender.js). Outlines are already
-// baked at GLYPH_BAKE_STROKE_WIDTH (see tools/import-glyphs.mjs) -- a
-// heavier weight than glyph-studio's own authoring default, since these
-// render small (a wheel-spoke label, a keyboard key).
+// centered on each glyph's OWN final ink -- its own baked outline's
+// bounding-box center, not glyph-studio's fixed grid origin -- so every
+// letter sits centered on what it actually drew, not on the fixed grid
+// cell it happened to be authored inside. Most tokens are also
+// uniformly rescaled (their own raw stroke centerlines, before outline
+// expansion) so every letter/ligature/compound shares one common
+// max(width,height) extent -- "normalizing letter heights/alignments"
+// -- except NORMALIZE_EXEMPT_TOKENS (see tools/import-glyphs.mjs),
+// which stay at their original authored scale. A renderer applies one
+// further shared scale factor on top of this (see src/glyphRender.js).
+// Outlines are already baked at GLYPH_BAKE_STROKE_WIDTH (see
+// tools/import-glyphs.mjs) -- a heavier weight than glyph-studio's own
+// authoring default, since these render small (a wheel-spoke label, a
+// keyboard key).
 //
 // GLYPH_PIXEL_GRIDS is a separate, unrelated representation -- glyph-
 // studio's own 16x16 boolean bitmap per token (hand-painted or derived,

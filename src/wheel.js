@@ -175,3 +175,15 @@ function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
 function lcm(a, b) { return (a / gcd(a, b)) * b; }
 const RING_LAP_LENGTHS = Object.values(RING_SPEED_WEIGHT).map((w) => (SPOKE_COUNT * MAX_RING_WEIGHT) / w);
 export const GRAND_CONVERGENCE_PULSES = RING_LAP_LENGTHS.reduce(lcm);
+
+// How many transposition steps of `stepSpokes` it takes to visit every
+// position and return home -- SPOKE_COUNT / gcd(SPOKE_COUNT, stepSpokes),
+// the standard cyclic-group-order formula (at the default step of 7,
+// gcd(7,12)=1, so this is 12 -- the full circle of fifths). Used by the
+// procession-history spiral readout (main.js/view.js) as the real,
+// discrete "the current transposition series has closed" event -- the
+// same formula this file's own onTraceLoop comments already stated in
+// prose, now a real reusable function instead of just prose.
+export function transpositionCycleSteps(stepSpokes) {
+  return SPOKE_COUNT / gcd(SPOKE_COUNT, stepSpokes);
+}

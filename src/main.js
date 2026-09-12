@@ -1,11 +1,11 @@
 import { deriveTrace, invalidRanges, annotateInputForDisplay } from "./trace.js";
 import { buildProcession, describeSteps, ROTATION_SPOKE_SHIFT } from "./transform.js";
-import { hzForSpoke, PLACEHOLDER_SPOKE_OF, ringForLetter, QWERTY_GLYPH_MAP } from "./letters.js";
+import { hzForSpoke, PLACEHOLDER_SPOKE_OF, ringForLetter, QWERTY_GLYPH_MAP, REST } from "./letters.js";
 import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS, DEFAULT_PERCUSSION_PARAMS, DEFAULT_MIX_PARAMS } from "./synth.js";
 import { Sequencer } from "./sequencer.js";
 import { MidiBridge } from "./midi.js";
 import { WheelView, DEFAULT_VIEW_PARAMS } from "./view.js";
-import { RING_OCTAVE_MULTIPLIER, ringSpeedMultiplier, SPOKE_COUNT, masterPulsesPerSecondToBpm, rotateSpoke, GRAND_CONVERGENCE_PULSES } from "./wheel.js";
+import { RING_OCTAVE_MULTIPLIER, ringSpeedMultiplier, SPOKE_COUNT, masterPulsesPerSecondToBpm, rotateSpoke, GRAND_CONVERGENCE_PULSES, transpositionCycleSteps } from "./wheel.js";
 import { loadAllPhrases, addPhrase, deletePhrase, isDefaultPhrase } from "./phrases.js";
 import { loadPresets, savePreset, deletePreset, loadLastSession, saveLastSession } from "./timbrePresets.js";
 import { PictographKeyboard } from "./keyboard.js";
@@ -177,9 +177,17 @@ new ResizeObserver((entries) => {
   if (width > 0 && height > 0) view.resize(width, height);
 }).observe(canvas);
 const audio = new OrphographAudio();
+// "Remove the automatic-hyphenation in the text input" -- letters just
+// concatenate now, the same hyphen-less shape plain hand-typed prose
+// already produces via tokenizeWord's own greedy longest-match
+// tokenizer (trace.js), consistent with the direct-glyph-typing layer's
+// own stated goal of reading "as close to automatic dictation as
+// possible." A manually-typed literal "-" still works as an explicit
+// disambiguation escape hatch (see the keydown handler below) -- this
+// function just no longer inserts one itself.
 function insertLetter(letter) {
   const input = $("input");
-  input.value += input.value === "" || input.value.endsWith(" ") ? letter : `-${letter}`;
+  input.value += letter;
   input.focus();
   updateInputBackdrop();
 }
@@ -198,12 +206,23 @@ function insertWordBoundary() {
 $("kbd-space").addEventListener("click", insertWordBoundary);
 
 // The counterpart insertLetter never needed -- the on-screen keyboard has
-// no delete key. Removes the LAST token (and its own leading separator,
-// if any), not one raw character -- "the string is the whole source of
-// truth" model insertLetter already uses, just run in reverse. A trailing
-// word-boundary space counts as its own removable "token" here (undoes
-// insertWordBoundary), same granularity a direct-glyph-typing backspace
-// should have.
+// no delete key. Removes the LAST token, not one raw character -- "the
+// string is the whole source of truth" model insertLetter already uses,
+// just run in reverse. A trailing word-boundary space counts as its own
+// removable "token" here (undoes insertWordBoundary), same granularity a
+// direct-glyph-typing backspace should have. Now that insertLetter no
+// longer auto-inserts a "-" between tokens, this can no longer find the
+// last token via lastIndexOf("-")/(" ") -- that search would find
+// nothing at all in ordinary hyphen-free text. Reworked to reuse
+// annotateInputForDisplay's own real tokenization (trace.js) instead:
+// its segments already partition the WHOLE string into real tokens
+// (valid/invalid) and separators (plain, spaces/hyphens) in order, so
+// the last segment IS the last token -- truncating to its own `start`
+// removes exactly it, whether or not a hyphen ever separated it from
+// what came before. A manually-typed trailing "-" (the hyphen still
+// works as a manual disambiguation escape hatch, see the keydown
+// handler below) is itself the last segment in that case, so one press
+// removes just that hyphen, one whole "token" per press either way.
 function removeLastToken() {
   const input = $("input");
   const value = input.value;
@@ -211,8 +230,9 @@ function removeLastToken() {
   if (value.endsWith(" ")) {
     input.value = value.slice(0, -1);
   } else {
-    const lastSep = Math.max(value.lastIndexOf("-"), value.lastIndexOf(" "));
-    input.value = lastSep === -1 ? "" : value.slice(0, lastSep);
+    const segments = annotateInputForDisplay(value);
+    const last = segments[segments.length - 1];
+    input.value = last ? value.slice(0, last.start) : "";
   }
   input.focus();
   updateInputBackdrop();
@@ -280,6 +300,7 @@ const DRONE_HZ = hzForSpoke(7) * Math.pow(2, DRONE_OCTAVE_SHIFT);
 // side already gives them.
 const lettersBySpokeAndRing = {};
 for (const [letter, spoke] of Object.entries(PLACEHOLDER_SPOKE_OF)) {
+  if (letter === REST) continue; // engine device, not a census letter -- see letters.js/keyboard.js/compactLegend.js
   const ring = ringForLetter(letter) || "unassigned";
   ((lettersBySpokeAndRing[spoke] ??= {})[ring] ??= []).push(letter);
 }
@@ -536,6 +557,19 @@ renderResponseSteps();
 let transpositionEnabled = true;
 let transpositionStepSpokes = ROTATION_SPOKE_SHIFT;
 let transpositionOffsetSpokes = 0;
+// How many real transposition steps have advanced since the current
+// series began -- "at the FULL (all cyclic transposition steps
+// included) timescale, all the way back to the first transposition in
+// the full series." Counts real advanceTransposition() calls, not
+// elapsed time; reset on Play (a fresh phrase starts a fresh series,
+// same reasoning as every other Play-scoped reset below) and whenever
+// the step-size slider changes (a different step size invalidates
+// however far the current series had progressed toward closing).
+// Compared each step against wheel.js's own transpositionCycleSteps --
+// the real, discrete "the series has closed and returned to its own
+// starting offset" event -- to reset the procession-history spiral
+// (view.js's resetCycleReadoutSeries) for a fresh coil.
+let transpositionStepCount = 0;
 // Real bug, root cause of "instant jumps": advanceTransposition used to
 // glide directly between two WRAPPED (0-11) offsets. Whenever
 // old+step >= 12, the wrapped `newOffset` can be numerically LESS than
@@ -595,6 +629,15 @@ function advanceTransposition() {
   // into the tunnel and clear it, so new drawing starts fresh under the
   // new transposition state.
   view.retireTrace();
+  // "All the way back to the first transposition/transform in the full
+  // series" -- a real step just happened; count it, and check whether
+  // the series has now closed (returned to its own starting offset) --
+  // see transpositionStepCount's own comment above.
+  transpositionStepCount += 1;
+  if (transpositionStepCount >= transpositionCycleSteps(transpositionStepSpokes)) {
+    transpositionStepCount = 0;
+    view.resetCycleReadoutSeries();
+  }
 }
 
 // Interpolated offset for the revolving ring, glided over one GIVEN-ring
@@ -606,6 +649,12 @@ $("transposition-enabled").addEventListener("change", (e) => {
 $("transposition-step").addEventListener("input", (e) => {
   const v = parseInt(e.target.value, 10);
   transpositionStepSpokes = Number.isFinite(v) ? Math.max(1, Math.min(11, v)) : ROTATION_SPOKE_SHIFT;
+  // A different step size changes what "the series" even means (a new
+  // transpositionCycleSteps target) -- whatever count the old series had
+  // reached no longer means anything against it, so start counting a
+  // fresh series rather than comparing progress made under one step size
+  // against a different size's own closure target.
+  transpositionStepCount = 0;
 });
 
 function transpositionGlideProgress() {
@@ -1268,6 +1317,7 @@ $("play").addEventListener("click", () => {
     // not a standing global state that survives retyping.
     transpositionOffsetSpokes = 0;
     transpositionOffsetUnwrapped = 0;
+    transpositionStepCount = 0;
     transpositionGlide = { fromOffset: 0, toOffset: 0, startedAt: performance.now() };
     audio.setTranspositionOffset(0);
     if ($("chamber-follows-input").checked) {

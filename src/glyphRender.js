@@ -24,8 +24,8 @@ export function hasPixelGlyph(token) {
 // (x, y), rotated by `angle` (radians), scaled so the glyph's own
 // authoring em (1200 units) maps to `heightPx` on screen. Caller sets
 // `ctx.fillStyle` beforehand (or pass `color`) -- this only handles
-// geometry, the same division of responsibility drawRadialText already
-// had with its own caller-set ctx.font/fillStyle.
+// geometry, the same division of responsibility view.js's drawRadialGlyph
+// already has with its own caller-set ctx.font/fillStyle.
 export function drawGlyph(ctx, token, { x, y, angle = 0, heightPx, color } = {}) {
   const outlines = GLYPH_OUTLINES[token];
   if (!outlines) return false;

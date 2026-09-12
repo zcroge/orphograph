@@ -43,7 +43,6 @@ const WHEEL_PALETTE = {
   structureBright: "#7a6f5c",  // emphasized structure: the two pole ticks only
   label: "#cabfa9",            // letter labels
   labelUnassigned: "#8a7f6c",  // unassigned-letter labels
-  emptySpokeNumber: "#726a58", // fallback spoke-number text on a truly empty spoke
 };
 
 import { SPOKE_COUNT, RINGS, spokePoint, spokeAngle, isPole, rotateSpoke, GRAND_CONVERGENCE_PULSES } from "./wheel.js";
@@ -130,49 +129,20 @@ function lerpSpokeShortest(from, to, t) {
   return from + diff * t;
 }
 
-// "When a ring containing letters/numbers rotates, they should follow both
-// in position AND rotation." Draws text at (x, y) rotated so its own local
-// "up" points radially outward from the wheel's center at `effectiveSpoke`
-// -- the exact same spoke value already used to compute (x, y) via
-// spokePoint, so a glyph's rotation is always derived from the identical
-// position it's drawn at, never a separate signal that could drift out of
-// sync. `spokeAngle(effectiveSpoke)` alone is the correct rotation (not
-// `spokeAngle(...) - PI/2`, the canvas-shifted angle spokePoint itself
-// uses internally) -- verified directly: at spoke 1 (top, angle 0) this is
-// 0 (upright, matching today's unrotated default look); at spoke 4 (right)
-// it's +90 deg (text's own "up" now points right, i.e., outward); at spoke
-// 7 (bottom) it's 180 deg (text reads upside-down, its "up" pointing down,
-// i.e., outward) -- genuinely correct at every position, not a
-// readability-preserving flip trick, since "rotational ACCURACY" was the
-// explicit ask.
-function drawRadialText(ctx, text, x, y, effectiveSpoke) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(spokeAngle(effectiveSpoke));
-  ctx.fillText(text, 0, 0);
-  ctx.restore();
-}
-
 // Real hand-drawn letterforms (baked from a glyph-studio export, see
-// tools/import-glyphs.mjs/src/glyphData.js), sibling to drawRadialText
-// above and falling back to it token-by-token for anything not yet
-// drawn -- so a phrase mixing drawn and undrawn letters (real today,
-// while coverage is partial) reads as glyph+text side by side rather
-// than breaking. `tokens` is an array (a single-letter label just
-// passes a 1-element array) since a spoke can carry more than one
-// letter (e.g. a rotation-twin pair sharing a spoke) -- laid out
-// left-to-right and centered as a whole around (x,y), the same overall
-// centering `ctx.textAlign = "center"` gave the old joined-string
-// version. Caller still sets ctx.font (for the text-fallback path) and
-// ctx.fillStyle (used for both text and glyph fill) beforehand, exactly
-// as it already did for drawRadialText -- this doesn't touch either.
-// A thin "/" still separates adjacent letters sharing one spoke label --
-// the same separator the old `letters.join("/")` string always drew --
-// regardless of whether either side ends up a real glyph or a text
-// fallback, so a still-undrawn pair (most tokens sharing a spoke, while
-// coverage is partial) doesn't visually run together the way two bare
-// fillText calls back to back would.
-const RADIAL_GLYPH_SEP = "/";
+// tools/import-glyphs.mjs/src/glyphData.js), falling back to plain text
+// token-by-token for anything not yet drawn -- so a phrase mixing drawn
+// and undrawn letters (real today, while coverage is partial) reads as
+// glyph+text side by side rather than breaking. `tokens` is an array (a
+// single-letter label just passes a 1-element array) since a spoke can
+// carry more than one letter (e.g. a rotation-twin pair sharing a
+// spoke) -- laid out left-to-right and centered as a whole around
+// (x,y), the same overall centering `ctx.textAlign = "center"` gave the
+// old joined-string version. Caller still sets ctx.font (for the
+// text-fallback path) and ctx.fillStyle (used for both text and glyph
+// fill) beforehand. No separator between adjacent letters sharing one
+// spoke label any more -- "remove... the slashes... from the wheel
+// visualizer" -- just the same PAD gap on both sides of the join.
 function drawRadialGlyph(ctx, tokens, x, y, effectiveSpoke, heightPx) {
   ctx.save();
   ctx.translate(x, y);
@@ -180,20 +150,14 @@ function drawRadialGlyph(ctx, tokens, x, y, effectiveSpoke, heightPx) {
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   const PAD = heightPx * 0.15;
-  const sepWidth = tokens.length > 1 ? ctx.measureText(RADIAL_GLYPH_SEP).width : 0;
   const widths = tokens.map((t) => (hasGlyph(t) ? (glyphBBox(t).width / 1200) * heightPx : ctx.measureText(t).width));
-  const totalWidth = widths.reduce((a, b) => a + b, 0) + (sepWidth + PAD * 2) * Math.max(0, tokens.length - 1);
+  const totalWidth = widths.reduce((a, b) => a + b, 0) + PAD * Math.max(0, tokens.length - 1);
   let cursorX = -totalWidth / 2;
   tokens.forEach((t, i) => {
     const w = widths[i];
     if (hasGlyph(t)) drawGlyph(ctx, t, { x: cursorX + w / 2, y: 0, heightPx });
     else ctx.fillText(t, cursorX, 0);
-    cursorX += w;
-    if (i < tokens.length - 1) {
-      cursorX += PAD;
-      ctx.fillText(RADIAL_GLYPH_SEP, cursorX, 0);
-      cursorX += sepWidth + PAD;
-    }
+    cursorX += w + PAD;
   });
   ctx.restore();
 }
@@ -207,9 +171,8 @@ function drawRadialGlyph(ctx, tokens, x, y, effectiveSpoke, heightPx) {
 // set) but doesn't draw anything.
 function radialGlyphWidth(ctx, tokens, heightPx) {
   const PAD = heightPx * 0.15;
-  const sepWidth = tokens.length > 1 ? ctx.measureText(RADIAL_GLYPH_SEP).width : 0;
   const widths = tokens.map((t) => (hasGlyph(t) ? (glyphBBox(t).width / 1200) * heightPx : ctx.measureText(t).width));
-  return widths.reduce((a, b) => a + b, 0) + (sepWidth + PAD * 2) * Math.max(0, tokens.length - 1);
+  return widths.reduce((a, b) => a + b, 0) + PAD * Math.max(0, tokens.length - 1);
 }
 
 // Ring hues are law-declared (00-laws.md/lexicon: given=yellow, received=
@@ -276,19 +239,21 @@ export class WheelView {
     this.resize(canvas.clientWidth || canvas.width, canvas.clientHeight || canvas.height);
     this.masterHull = [];
     this.masterHullLetters = [];
-    // "A continuous outer ring that slowly makes a turn per full
-    // operation procession cycle, a cyclical readout/record of the
-    // letters/notes played." Unlike masterHull (the typed phrase's own
-    // KNOWN shape, set once when a phrase loads) or persistentTraceByRing
-    // (per-ring, wiped on every given-ring lap), this accumulates live,
-    // one entry per REAL sounded note across all three rings (see
-    // recordCycleReadoutLetter/main.js's onNoteHit), and ages out on its
-    // own -- see the render()-time draw block for the rotation math.
-    // { letter, capturedAtPulse } -- capturedAtPulse is the raw,
-    // never-wrapping sequencer.masterPulseCount at the moment it was
-    // stamped, so "how far around the ring has this drifted" is always
-    // just (liveCount - capturedAtPulse), no modular bookkeeping needed
-    // at capture time.
+    // "A continuous, full procession reflected in the orbiting
+    // glyph-trail... after making a full circle, the glyphs should drop
+    // into a lower, spiraling, more compact continuous trail." Unlike
+    // masterHull (the typed phrase's own KNOWN shape, set once when a
+    // phrase loads) or persistentTraceByRing (per-ring, wiped on every
+    // given-ring lap), this accumulates live, one entry per REAL sounded
+    // note across all three rings (see recordCycleReadoutLetter/main.js's
+    // onNoteHit), and ages/coils inward on its own -- see the
+    // render()-time draw block for the lap/radius/alpha math. { letter,
+    // capturedAtPulse } -- capturedAtPulse is the raw, never-wrapping
+    // sequencer.masterPulseCount at the moment it was stamped, so both
+    // "how far around its own lap has this drifted" and "how many laps
+    // ago did that lap complete" are always derivable from just
+    // (liveCount - capturedAtPulse), no modular bookkeeping needed at
+    // capture time.
     this._cycleReadout = [];
     // "There should be some level of flat-plane persistence to give a
     // readable trace the user can see clearly." Capacity-bound, not time-
@@ -472,11 +437,13 @@ export class WheelView {
     this._labelHeightPx = 16 * scale;
     this._poleLabelHeightPx = 17 * scale;
     this._hullHeightPx = 13 * scale;
-    // Kept small on purpose -- this ring's own free radius band
-    // (outerR+73..+94) is narrower than the hull-trace's, and a genuine
-    // readout of "everything played this cycle" can carry a lot of
-    // simultaneous entries; a modest glyph height keeps it legible
-    // without letters overlapping their own neighbors as they drift.
+    // Kept small on purpose -- the procession-history spiral's own
+    // per-lap radial step (SPIRAL_LAP_STEP, see render()'s own spiral
+    // block) is narrow, and a genuine readout of "the whole procession
+    // so far" can carry many simultaneous entries across many coiled
+    // laps at once; a modest glyph height keeps each lap legible without
+    // its letters overlapping their own neighbors, or the lap coiled in
+    // just inside it.
     this._cycleReadoutHeightPx = 12 * scale;
   }
 
@@ -935,6 +902,21 @@ export class WheelView {
     this._cycleReadout.push({ letter, capturedAtPulse });
   }
 
+  // "All the way back to the first transposition/transform in the full
+  // series" -- called from main.js the moment the live transposition
+  // series actually closes (returns to its own starting offset, a real,
+  // discrete, countable event -- see wheel.js's transpositionCycleSteps).
+  // A fixed ~10-lap radial budget (see the render()-time spiral block's
+  // own ACTIVE_RADIUS/INNER_LIMIT comment) can't literally keep an
+  // arbitrarily long series on screen forever; clearing here at the one
+  // moment that's actually structurally meaningful is what stands in for
+  // that, so the next series starts its own fresh spiral from nothing,
+  // the same "each new phrase starts fresh" treatment reset() already
+  // gives the whole readout on Play.
+  resetCycleReadoutSeries() {
+    this._cycleReadout = [];
+  }
+
   // "The trace should also be less persistent... not just a constantly
   // washed-out white outline" -- and still "isn't fading nearly as quick
   // as it should." Cut again (18 -> 12 default, 64 -> 40 cap) -- main.js's
@@ -1057,49 +1039,15 @@ export class WheelView {
       ctx.stroke();
     }
 
-    // The outer procession ring -- "the rotating rim should probably stay
-    // static and only advance/rotate to its new transpose state/offset on
-    // the transpose or given step." Genuinely circumscribed (two boundary
-    // arcs, not a bare line) and divided into its own 12 segments the same
-    // way the letter rings below are, each inscribed with its spoke number
-    // in the wheel's own fixed canonical order. Rotates on
-    // `masterRotationOffset` -- main.js's rim DIAL, which holds perfectly
-    // still and steps (with an eased settle) only on the given ring's own
-    // trace loop, not a continuous per-frame spin. Kept entirely separate
-    // from the transposition ring just below -- that one shows the
-    // interpolated PITCH offset itself; this one shows the given-ring's own
-    // step mechanism.
-    {
-      const ringIn = outerR + 14;
-      const ringOut = outerR + 26;
-      const ringMid = (ringIn + ringOut) / 2;
-      const offset = masterRotationOffset || 0;
-      ctx.strokeStyle = WHEEL_PALETTE.structure;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(cx, cy, ringIn, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(cx, cy, ringOut, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      for (let s = 1; s <= SPOKE_COUNT; s++) {
-        const divIn = spokePoint(s + 0.5 - offset, ringIn, cx, cy);
-        const divOut = spokePoint(s + 0.5 - offset, ringOut, cx, cy);
-        ctx.beginPath();
-        ctx.moveTo(divIn.x, divIn.y);
-        ctx.lineTo(divOut.x, divOut.y);
-        ctx.strokeStyle = WHEEL_PALETTE.structureDim;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        const labelP = spokePoint(s - offset, ringMid, cx, cy);
-        ctx.font = "9px sans-serif";
-        ctx.fillStyle = WHEEL_PALETTE.label;
-        drawRadialText(ctx, String(s), labelP.x, labelP.y, s - offset);
-      }
-    }
+    // The rim-dial ring that used to circumscribe the given ring here
+    // (two boundary arcs, 12 dividers, spoke-number labels, stepping on
+    // `masterRotationOffset`) is gone -- "remove... the roman numerals...
+    // from the wheel visualizer," and per the owner's own follow-up
+    // answer, the whole ring structure along with them, freeing this
+    // radial band (outerR+14..+26) for the procession-history spiral
+    // below. `masterRotationOffset` itself is untouched -- still read as
+    // `rimOffset` further down, still driving the unassigned-letter
+    // bracket's own rotation.
 
     // The cyclic transposition ring -- circumscribing the outermost (given)
     // ring, denoting the transposition state/offset/modal shift currently
@@ -1131,37 +1079,52 @@ export class WheelView {
       ctx.fill();
     }
 
-    // The cycle-readout ring -- "a continuous outer ring that slowly
-    // makes a turn per full operation procession cycle, a cyclical
-    // readout/record of the letters/notes played." A real rotating
-    // record, not a fill-then-reset gauge: every entry is stamped at a
-    // fixed write-head position (spoke 1, the wheel's own pole) the
-    // instant it's played (see recordCycleReadoutLetter), then visually
-    // drifts clockwise away from that head as time passes, completing
-    // exactly one lap over exactly one grand-convergence cycle
-    // (wheel.js's GRAND_CONVERGENCE_PULSES, a fixed 20.0s at the locked
-    // 72 BPM anchor) before arriving back at the head and being dropped
-    // -- a genuine rolling window onto "what's just been played," always
-    // current, never a hard cut. This is the "stable record" palette
+    // The procession-history spiral -- "after making a full circle, the
+    // glyphs should drop into a lower, spiraling, more compact continuous
+    // trail of the glyphs/notes played... a continuous, full procession
+    // reflected in the orbiting glyph-trail, not the sparse and quickly
+    // orbiting trickle." Replaces the old single 20-second rolling ring
+    // (one lap, drop): every entry still sweeps its OWN lap exactly like
+    // before -- stamped at the write head (spoke 1) the instant it's
+    // played (see recordCycleReadoutLetter), drifting clockwise over
+    // exactly one grand-convergence cycle (wheel.js's
+    // GRAND_CONVERGENCE_PULSES, a fixed 20.0s at the locked 72 BPM
+    // anchor) -- but once that lap completes, the entry no longer drops:
+    // it coils one step INWARD instead, to a smaller radius, and keeps
+    // its angular position (screenSpoke) permanently from then on,
+    // effectively frozen at wherever its own lap happened to leave it.
+    // Every further completed lap steps it inward again, dimmer each
+    // time -- a real, continuous, MANY-lap trail rather than a
+    // one-lap-then-gone window, spanning back through the whole
+    // performance (bounded only by the radial budget below, see
+    // ACTIVE_RADIUS/INNER_LIMIT's own comment) rather than just the last
+    // 20 seconds. This is still the "stable record" palette
     // (WHEEL_PALETTE.label), not the bright active/echo one (#f4ead0) --
     // a quiet, always-legible readout, same visual role
     // persistentTraceByRing already plays for its own per-ring trace,
     // just unified across all three rings and rim-mounted instead.
     {
-      const cycleReadoutRadius = outerR + 82 * scale;
-      // Static track, always visible -- same "a real lane exists here
-      // even when nothing's on it" treatment the transposition ring's
-      // own track uses just above.
+      // The radial band this spiral has to work with -- real room now
+      // that the rim-dial ring (which used to occupy outerR+14..+26) is
+      // gone. ACTIVE_RADIUS is where the currently-open (newest) lap
+      // always sweeps, exactly where the old single-lap ring used to
+      // live; INNER_LIMIT is as far in as a coil is allowed to shrink
+      // before it's pruned for good, just past the rim ticks.
+      const ACTIVE_RADIUS = outerR + 88 * scale;
+      const INNER_LIMIT = outerR + 16 * scale;
+      const SPIRAL_LAP_STEP = 7 * scale;
+      const MAX_LAPS_VISIBLE = Math.floor((ACTIVE_RADIUS - INNER_LIMIT) / SPIRAL_LAP_STEP);
+
+      // Static track + write head, both fixed at ACTIVE_RADIUS -- the
+      // one lap actually still moving; older, coiled-in laps have no
+      // track of their own (they're a settled record, not a live lane).
       ctx.beginPath();
-      ctx.arc(cx, cy, cycleReadoutRadius, 0, Math.PI * 2);
+      ctx.arc(cx, cy, ACTIVE_RADIUS, 0, Math.PI * 2);
       ctx.strokeStyle = WHEEL_PALETTE.structureDim;
       ctx.lineWidth = 1;
       ctx.stroke();
-      // The write head itself -- a small fixed tick at spoke 1, not a
-      // glowing marker (this isn't an active cursor, just where new
-      // content currently appears).
-      const headIn = spokePoint(1, cycleReadoutRadius - 4 * scale, cx, cy);
-      const headOut = spokePoint(1, cycleReadoutRadius + 4 * scale, cx, cy);
+      const headIn = spokePoint(1, ACTIVE_RADIUS - 4 * scale, cx, cy);
+      const headOut = spokePoint(1, ACTIVE_RADIUS + 4 * scale, cx, cy);
       ctx.beginPath();
       ctx.moveTo(headIn.x, headIn.y);
       ctx.lineTo(headOut.x, headOut.y);
@@ -1170,20 +1133,29 @@ export class WheelView {
       ctx.stroke();
 
       ctx.font = `${this._cycleReadoutHeightPx}px sans-serif`;
-      ctx.fillStyle = WHEEL_PALETTE.label;
+      // lapIndex/positionWithinLap: pull a raw (never-wrapping) pulse
+      // count apart into "which lap" and "how far around that lap,"
+      // exactly once each, for both the live clock and every entry's own
+      // capture time -- see lapsAgo/screenSpoke below.
+      const lapIndex = (pulse) => Math.floor(pulse / GRAND_CONVERGENCE_PULSES);
+      const positionWithinLap = (pulse) => ((pulse % GRAND_CONVERGENCE_PULSES) + GRAND_CONVERGENCE_PULSES) % GRAND_CONVERGENCE_PULSES;
+      const liveLap = lapIndex(masterPulseCount);
       this._cycleReadout = this._cycleReadout.filter((entry) => {
-        const elapsedPulses = masterPulseCount - entry.capturedAtPulse;
-        if (elapsedPulses >= GRAND_CONVERGENCE_PULSES) return false;
-        const screenSpoke = 1 + (elapsedPulses / GRAND_CONVERGENCE_PULSES) * SPOKE_COUNT;
-        // Graceful fade over the last ~15% of the lap, approaching the
-        // write head, rather than an abrupt disappearance -- the same
-        // fade shape (Math.pow(1-t, exponent)) the hull's own frozen
-        // copies already use.
-        const lifeFrac = elapsedPulses / GRAND_CONVERGENCE_PULSES;
-        const fadeStart = 0.85;
-        const alpha = lifeFrac <= fadeStart ? 1 : Math.pow(1 - (lifeFrac - fadeStart) / (1 - fadeStart), 2);
+        // An entry's angular position within ITS OWN lap is fixed the
+        // moment that lap completes (lapsAgo >= 1) -- only how far
+        // inward it's coiled keeps changing after that, never where
+        // around the circle it sits.
+        const screenSpoke = 1 + (positionWithinLap(entry.capturedAtPulse) / GRAND_CONVERGENCE_PULSES) * SPOKE_COUNT;
+        const lapsAgo = liveLap - lapIndex(entry.capturedAtPulse);
+        if (lapsAgo > MAX_LAPS_VISIBLE) return false; // coiled past the inner limit -- a real, bounded budget, see this block's own comment
+        const radius = ACTIVE_RADIUS - lapsAgo * SPIRAL_LAP_STEP;
+        // Newest lap brightest, each further-coiled lap dimmer -- the
+        // same eased fade-with-depth shape the hull's own frozen copies
+        // use, just driven by completed LAPS instead of elapsed time.
+        const alpha = Math.pow(1 - lapsAgo / (MAX_LAPS_VISIBLE + 1), 2);
+        ctx.fillStyle = WHEEL_PALETTE.label;
         ctx.globalAlpha = alpha;
-        const p = spokePoint(screenSpoke, cycleReadoutRadius, cx, cy);
+        const p = spokePoint(screenSpoke, radius, cx, cy);
         drawRadialGlyph(ctx, [entry.letter], p.x, p.y, screenSpoke, this._cycleReadoutHeightPx);
         ctx.globalAlpha = 1;
         return true;
@@ -1282,20 +1254,13 @@ export class WheelView {
         ctx.fillStyle = WHEEL_PALETTE.labelUnassigned;
         drawRadialGlyph(ctx, groups.unassigned, p.x, p.y, s - rimOffset, unassignedHeightPx);
       }
-      if (!Object.keys(groups).length) {
-        // No table entry at all for this spoke -- fall back to the raw
-        // number so an empty spoke still reads as something.
-        const p = spokePoint(s - rimOffset, outerR + 18 * scale, cx, cy);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 10 * scale, 0, Math.PI * 2);
-        ctx.setLineDash([2, 3]);
-        ctx.strokeStyle = WHEEL_PALETTE.structureDim;
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = WHEEL_PALETTE.emptySpokeNumber;
-        ctx.font = isPole(s) ? `bold ${13 * scale}px sans-serif` : `${12 * scale}px sans-serif`;
-        drawRadialText(ctx, String(s), p.x, p.y, s - rimOffset);
-      }
+      // The empty-spoke fallback numeral that used to render here (a
+      // dashed circle + raw spoke number) was unreachable dead code --
+      // every one of the 12 spokes always has a real PLACEHOLDER_SPOKE_OF
+      // table entry (either a ring assignment or "unassigned"), so
+      // `!Object.keys(groups).length` never actually occurred. Removed
+      // along with the rest of the plain-numeral cleanup rather than left
+      // in place unreachable.
     }
 
     const now = performance.now();
