@@ -327,6 +327,17 @@ export class Sequencer {
     return this._masterPulseCount;
   }
 
+  // Same exposure, same reasoning, sub-pulse-smooth -- the whole-pulse
+  // counter above steps once every ~278ms (at the fixed 72 BPM anchor),
+  // which is coarse for something meant to animate continuously (the
+  // outer cycle-readout ring's own rotation). The fractional part is the
+  // SAME accumulator the whole-pulse counter already drains every frame,
+  // just read before it's consumed, so this never drifts from
+  // masterPulseCount's own integer steps.
+  get masterPulseCountFractional() {
+    return this._masterPulseCount + this._masterPulseAccumulator;
+  }
+
   _loop() {
     if (!this._running) return;
     const now = performance.now();

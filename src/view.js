@@ -46,7 +46,7 @@ const WHEEL_PALETTE = {
   emptySpokeNumber: "#726a58", // fallback spoke-number text on a truly empty spoke
 };
 
-import { SPOKE_COUNT, RINGS, spokePoint, spokeAngle, isPole, rotateSpoke } from "./wheel.js";
+import { SPOKE_COUNT, RINGS, spokePoint, spokeAngle, isPole, rotateSpoke, GRAND_CONVERGENCE_PULSES } from "./wheel.js";
 import { hasGlyph, glyphBBox, drawGlyph } from "./glyphRender.js";
 
 // "Granular parametric control over the visuals now, especially the echo
@@ -276,6 +276,20 @@ export class WheelView {
     this.resize(canvas.clientWidth || canvas.width, canvas.clientHeight || canvas.height);
     this.masterHull = [];
     this.masterHullLetters = [];
+    // "A continuous outer ring that slowly makes a turn per full
+    // operation procession cycle, a cyclical readout/record of the
+    // letters/notes played." Unlike masterHull (the typed phrase's own
+    // KNOWN shape, set once when a phrase loads) or persistentTraceByRing
+    // (per-ring, wiped on every given-ring lap), this accumulates live,
+    // one entry per REAL sounded note across all three rings (see
+    // recordCycleReadoutLetter/main.js's onNoteHit), and ages out on its
+    // own -- see the render()-time draw block for the rotation math.
+    // { letter, capturedAtPulse } -- capturedAtPulse is the raw,
+    // never-wrapping sequencer.masterPulseCount at the moment it was
+    // stamped, so "how far around the ring has this drifted" is always
+    // just (liveCount - capturedAtPulse), no modular bookkeeping needed
+    // at capture time.
+    this._cycleReadout = [];
     // "There should be some level of flat-plane persistence to give a
     // readable trace the user can see clearly." Capacity-bound, not time-
     // bound (see setTraceCapacity), stays at the ring's own full base
@@ -458,6 +472,12 @@ export class WheelView {
     this._labelHeightPx = 16 * scale;
     this._poleLabelHeightPx = 17 * scale;
     this._hullHeightPx = 13 * scale;
+    // Kept small on purpose -- this ring's own free radius band
+    // (outerR+73..+94) is narrower than the hull-trace's, and a genuine
+    // readout of "everything played this cycle" can carry a lot of
+    // simultaneous entries; a modest glyph height keeps it legible
+    // without letters overlapping their own neighbors as they drift.
+    this._cycleReadoutHeightPx = 12 * scale;
   }
 
   reset() {
@@ -466,6 +486,7 @@ export class WheelView {
     this._provisionalSegments = [];
     this.masterHull = [];
     this.masterHullLetters = [];
+    this._cycleReadout = [];
     this._hullEchoAges = [];
     this._hullFrozenCopies = [];
     this._eventPulse = { amount: 0, startedAt: 0, life: 1 };
@@ -902,6 +923,18 @@ export class WheelView {
     this.masterHullLetters = letters;
   }
 
+  // "A cyclical readout/record of the letters/notes played" -- called
+  // once per REAL sounded note (main.js's onNoteHit, the same condition
+  // that gates audio.playNote itself, deliberately not the "every ring,
+  // owned or merely passed" recordVisit hook -- a shared trace's content
+  // is hit by all three tempo-offset rings, so hooking there would
+  // triple-stamp one conceptual note). Just appends -- the render()-time
+  // draw block below is what ages entries out and drops them, this
+  // method doesn't need to know anything about that lifecycle.
+  recordCycleReadoutLetter(letter, capturedAtPulse) {
+    this._cycleReadout.push({ letter, capturedAtPulse });
+  }
+
   // "The trace should also be less persistent... not just a constantly
   // washed-out white outline" -- and still "isn't fading nearly as quick
   // as it should." Cut again (18 -> 12 default, 64 -> 40 cap) -- main.js's
@@ -978,7 +1011,7 @@ export class WheelView {
     this.captureStandingGeneration(vp.standingHitIncrementStrength);
   }
 
-  render({ ringLabelsAtSpoke, transposition, hullCursorByRing, ringHitFlash, masterRotationOffset, ringDialOffsets, droneBreathHz = 0 }) {
+  render({ ringLabelsAtSpoke, transposition, hullCursorByRing, ringHitFlash, masterRotationOffset, ringDialOffsets, droneBreathHz = 0, masterPulseCount = 0 }) {
     const { ctx, cx, cy, outerR } = this;
     const scale = this._scale;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -1096,6 +1129,65 @@ export class WheelView {
       ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
       ctx.fillStyle = "#fff";
       ctx.fill();
+    }
+
+    // The cycle-readout ring -- "a continuous outer ring that slowly
+    // makes a turn per full operation procession cycle, a cyclical
+    // readout/record of the letters/notes played." A real rotating
+    // record, not a fill-then-reset gauge: every entry is stamped at a
+    // fixed write-head position (spoke 1, the wheel's own pole) the
+    // instant it's played (see recordCycleReadoutLetter), then visually
+    // drifts clockwise away from that head as time passes, completing
+    // exactly one lap over exactly one grand-convergence cycle
+    // (wheel.js's GRAND_CONVERGENCE_PULSES, a fixed 20.0s at the locked
+    // 72 BPM anchor) before arriving back at the head and being dropped
+    // -- a genuine rolling window onto "what's just been played," always
+    // current, never a hard cut. This is the "stable record" palette
+    // (WHEEL_PALETTE.label), not the bright active/echo one (#f4ead0) --
+    // a quiet, always-legible readout, same visual role
+    // persistentTraceByRing already plays for its own per-ring trace,
+    // just unified across all three rings and rim-mounted instead.
+    {
+      const cycleReadoutRadius = outerR + 82 * scale;
+      // Static track, always visible -- same "a real lane exists here
+      // even when nothing's on it" treatment the transposition ring's
+      // own track uses just above.
+      ctx.beginPath();
+      ctx.arc(cx, cy, cycleReadoutRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = WHEEL_PALETTE.structureDim;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      // The write head itself -- a small fixed tick at spoke 1, not a
+      // glowing marker (this isn't an active cursor, just where new
+      // content currently appears).
+      const headIn = spokePoint(1, cycleReadoutRadius - 4 * scale, cx, cy);
+      const headOut = spokePoint(1, cycleReadoutRadius + 4 * scale, cx, cy);
+      ctx.beginPath();
+      ctx.moveTo(headIn.x, headIn.y);
+      ctx.lineTo(headOut.x, headOut.y);
+      ctx.strokeStyle = WHEEL_PALETTE.structure;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.font = `${this._cycleReadoutHeightPx}px sans-serif`;
+      ctx.fillStyle = WHEEL_PALETTE.label;
+      this._cycleReadout = this._cycleReadout.filter((entry) => {
+        const elapsedPulses = masterPulseCount - entry.capturedAtPulse;
+        if (elapsedPulses >= GRAND_CONVERGENCE_PULSES) return false;
+        const screenSpoke = 1 + (elapsedPulses / GRAND_CONVERGENCE_PULSES) * SPOKE_COUNT;
+        // Graceful fade over the last ~15% of the lap, approaching the
+        // write head, rather than an abrupt disappearance -- the same
+        // fade shape (Math.pow(1-t, exponent)) the hull's own frozen
+        // copies already use.
+        const lifeFrac = elapsedPulses / GRAND_CONVERGENCE_PULSES;
+        const fadeStart = 0.85;
+        const alpha = lifeFrac <= fadeStart ? 1 : Math.pow(1 - (lifeFrac - fadeStart) / (1 - fadeStart), 2);
+        ctx.globalAlpha = alpha;
+        const p = spokePoint(screenSpoke, cycleReadoutRadius, cx, cy);
+        drawRadialGlyph(ctx, [entry.letter], p.x, p.y, screenSpoke, this._cycleReadoutHeightPx);
+        ctx.globalAlpha = 1;
+        return true;
+      });
     }
 
     // Engraved-bezel segment dividers -- "the rings and their symbol

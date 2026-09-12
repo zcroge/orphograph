@@ -834,6 +834,14 @@ const sequencer = new Sequencer({
       applyVowelFromLetters([target.letter]);
       keyboard.flash(target.letter);
       legendGrid.flash(target.letter);
+      // "A cyclical readout/record of the letters/notes played" -- exactly
+      // this branch, deliberately not view.recordVisit above: a shared
+      // trace's content is hit by all three tempo-offset rings, so
+      // hooking a "some ring passed through here" event would triple-
+      // stamp one conceptual note. This fires once per REAL audible
+      // sound (velocity > 0), the same condition that gates playNote
+      // itself just above.
+      view.recordCycleReadoutLetter(target.letter, sequencer.masterPulseCount);
       // Native chord voicing -- retunes once per WORD boundary now, not
       // once per letter (see the "native chord-voicing engine" plan's own
       // flagged behavioral change): melody mode still plays individual
@@ -1108,6 +1116,12 @@ function render() {
   view.render({
     ringLabelsAtSpoke, transposition, hullCursorByRing, ringHitFlash,
     masterRotationOffset: dialOffset(rimDial), ringDialOffsets, droneBreathHz,
+    // "A continuous outer ring that slowly makes a turn per full
+    // operation procession cycle" -- the cycle-readout ring's own
+    // rotation. Same "main.js computes the live clock value, view.js only
+    // renders it" split every other continuous motion here already uses
+    // (transposition's own glide progress, the phase-bar cursors above).
+    masterPulseCount: sequencer.masterPulseCountFractional,
   });
 }
 render();
