@@ -108,12 +108,7 @@
         ground tempo (fixed -- a resting heart-rate anchor) -- <span id="bpm-readout">0 BPM</span>
       </label>
 
-      <label class="advanced-only" title="A real resultant rhythm (the West/Central African interlocking-bell technique) -- one kick/snare/hat kit built from all three rings' own asynchronous onsets, fired on every real hit regardless of tier emphasis or the ghost-taps checkbox above (a structural layer, not a competing melodic voice -- stays audible under flute-solo too). A distinct, louder accent marks every breath cycle (10s at the fixed ground tempo).">
-        percussion level -- <span id="percussion-level-readout">1.00</span>
-        <input id="percussion-level" type="range" min="0" max="1" step="0.01" value="1" />
-      </label>
-
-      <div class="row advanced-only" title="Percussion kit and pattern -- see the full percussion timbre panel below for every individual slider.">
+      <div class="row advanced-only" title="Percussion kit and pattern -- see the full percussion timbre panel below for every individual slider. Percussion's own level now lives in the mixer panel further down (mixPercussion), alongside every other channel's fader.">
         <label class="inline">kit
           <select id="percussion-kit-preset"><option value="">(custom)</option><option value="acoustic" selected>Acoustic</option><option value="electronic">Electronic</option><option value="frameDrum">Frame drum</option><option value="industrial">Industrial</option></select>
         </label>
@@ -159,7 +154,7 @@
         </div>
         <div class="timbre-grid">
           <div class="timbre-group-label">levels</div>
-          <label>overall drone level<span class="rw"><input type="range" id="dp-busGain" min="0" max="0.8" value="0.2" step="0.01" /><input type="number" id="dp-busGain-n" min="0" max="0.8" value="0.2" step="0.01" /></span></label>
+          <label title="Timbre-internal, not a fader -- also sets the drone's own internal ring-gain balance, not just loudness. For overall drone LEVEL against the other instruments, use the mixer panel's 'drone' channel fader instead.">overall drone level<span class="rw"><input type="range" id="dp-busGain" min="0" max="0.8" value="0.2" step="0.01" /><input type="number" id="dp-busGain-n" min="0" max="0.8" value="0.2" step="0.01" /></span></label>
 
           <div class="timbre-group-label">movement (breathing = amplitude, vibrato = pitch -- off the master ground-tempo pulse, not any one ring's own)</div>
           <label title="Pulses per breath cycle, off the master ground-tempo pulse -- not a free Hz value. Lower = faster breathing at any given procession speed.">breathing period (pulses/cycle)<span class="rw"><input type="range" id="dp-breathPulsesPerCycle" min="1" max="32" value="24" step="1" /><input type="number" id="dp-breathPulsesPerCycle-n" min="1" max="32" value="24" step="1" /></span></label>
@@ -188,7 +183,7 @@
           <label title="NOT portamento -- real flute articulation changes pitch cleanly between fingerings, it doesn't slide. This just avoids a hard digital click at the transition; raising it far introduces an audible bend/lerp, which a real player's note-to-note playing doesn't have.">pitch transition (ms, click-avoidance only)<span class="rw"><input type="range" id="dp-whistleGlideMs" min="5" max="200" value="5" step="1" /><input type="number" id="dp-whistleGlideMs-n" min="5" max="200" value="5" step="1" /></span></label>
           <label title="'There needs to be some kind of note envelope/gate per voice that allows seamless droning while a single tone is allowed to organically change notes with a proper flute-note-change sound profile.' A real flute doesn't retune in place -- a player's tongue briefly stops the air column between notes, which is also what hides the fingering change's own instability. This is how far the tone (and breath, together) duck before the new pitch and the attack -- 0 is the old smooth-retune behavior, higher is a more clearly tongued gap. Never reaches full silence, so the voice's own continuous drone still holds.">note-change gate depth (tongued dip)<span class="rw"><input type="range" id="dp-whistleNoteGateDipAmount" min="0" max="0.95" value="0.45" step="0.01" /><input type="number" id="dp-whistleNoteGateDipAmount-n" min="0" max="0.95" value="0.45" step="0.01" /></span></label>
           <label title="A small, fixed spread BETWEEN this voice's own cluster voices (real independent pipes don't land on the exact same cent) -- alternating +/- by voice slot. Used to be within one voice's own oscillator pair back when the tone core was synthesized; a real recorded sample doesn't need synthetic shimmer the way a pure sine did.">voicing spread (cents, between cluster voices)<span class="rw"><input type="range" id="dp-whistleDetuneCents" min="0" max="20" value="13.5" step="0.5" /><input type="number" id="dp-whistleDetuneCents-n" min="0" max="20" value="13.5" step="0.5" /></span></label>
-          <label title="The tone core's own level -- this is the main 'how loud is the flute' control. This is the UNISON layer's own level; the two octave-doubling sliders below scale relative to it.">tone level<span class="rw"><input type="range" id="dp-whistleAmount" min="0" max="1" value="0.4" step="0.01" /><input type="number" id="dp-whistleAmount-n" min="0" max="1" value="0.4" step="0.01" /></span></label>
+          <label title="Timbre-internal, not a fader -- also scales vibrato/tone-wander depth, not just loudness (see setDroneVoices). This is the UNISON layer's own level; the two octave-doubling sliders below scale relative to it. For overall flute LEVEL against the other instruments, use the mixer panel's 'flute' channel fader instead.">tone level<span class="rw"><input type="range" id="dp-whistleAmount" min="0" max="1" value="0.4" step="0.01" /><input type="number" id="dp-whistleAmount-n" min="0" max="1" value="0.4" step="0.01" /></span></label>
           <label class="inline" title="'Mode, key, progression could be derived intuitively from input alone, free of arbitrary user decision-making.' The wheel's own spoke-to-semitone mapping is already direct and linear -- when on, the shared scale every ring's pitch quantizes to (see below) is computed fresh from the actual letters in whatever's about to play: the unique spokes they land on, converted to semitones. A short/repetitive phrase naturally gives a narrower mode; a varied one gives a richer one -- the mode reflects what was actually typed instead of a standing manual choice. Falls back to whatever's in the scale field below if the current phrase touches no real letters.">
             <input type="checkbox" id="scale-follows-input" checked /> scale follows typed input
           </label>
@@ -283,6 +278,38 @@
           <label>tone (Hz, highpass)<span class="rw"><input type="range" id="pp-hatHighpassHz" min="1000" max="12000" value="6000" step="100" /><input type="number" id="pp-hatHighpassHz-n" min="1000" max="12000" value="6000" step="100" /></span></label>
           <label>level<span class="rw"><input type="range" id="pp-hatGain" min="0" max="1" value="0.35" step="0.01" /><input type="number" id="pp-hatGain-n" min="0" max="1" value="0.35" step="0.01" /></span></label>
           <label>decay (ms)<span class="rw"><input type="range" id="pp-hatDecayMs" min="5" max="150" value="30" step="1" /><input type="number" id="pp-hatDecayMs-n" min="5" max="150" value="30" step="1" /></span></label>
+        </div>
+      </details>
+
+      <details class="timbre-panel advanced-only" id="mix-meter-panel">
+        <summary>mixer (per-channel level, a targeted flute low-mid boost, and a leveler for overall balance) -- a few elegantly designed levers, not another timbre panel</summary>
+        <div class="row timbre-presets">
+          <select id="mix-preset-select"><option value="">(unsaved)</option></select>
+          <button id="mix-preset-save">save as...</button>
+          <button id="mix-preset-delete">delete</button>
+          <button id="mix-preset-reset">factory default</button>
+        </div>
+        <div class="mix-meters">
+          <div class="mix-meter-row"><span class="mix-meter-label">drone</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-drone"></span></span></div>
+          <div class="mix-meter-row"><span class="mix-meter-label">note</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-note"></span></span></div>
+          <div class="mix-meter-row"><span class="mix-meter-label">flute</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-flute"></span></span></div>
+          <div class="mix-meter-row"><span class="mix-meter-label">percussion</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-percussion"></span></span></div>
+          <div class="mix-meter-row"><span class="mix-meter-label">master</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-master"></span></span><span class="mix-meter-clip" id="mix-meter-clip">clip</span></div>
+        </div>
+        <div class="timbre-grid">
+          <div class="timbre-group-label">channel levels (post-timbre faders -- busGain/whistleAmount in their own panels stay timbre-internal, not level controls)</div>
+          <label title="The bass drone's own overall level.">drone<span class="rw"><input type="range" id="mp-mixDrone" min="0" max="2" value="1" step="0.01" /><input type="number" id="mp-mixDrone-n" min="0" max="2" value="1" step="0.01" /></span></label>
+          <label title="Every kalimba/note hit and hocket ghost-tap click -- previously no standing level control existed for this voice at all, only per-hit velocity.">note (kalimba)<span class="rw"><input type="range" id="mp-mixNote" min="0" max="2" value="1" step="0.01" /><input type="number" id="mp-mixNote-n" min="0" max="2" value="1" step="0.01" /></span></label>
+          <label title="The flute's overall level -- raised above the others by default (1.45) to restore the presence the recent de-harshing pass's growl-amount/formant reductions traded away for a softer tone.">flute<span class="rw"><input type="range" id="mp-mixFlute" min="0" max="2" value="1.45" step="0.01" /><input type="number" id="mp-mixFlute-n" min="0" max="2" value="1.45" step="0.01" /></span></label>
+          <label title="The resultant-rhythm kick/snare/hat ensemble's own level -- replaces the old standalone 'percussion level' slider, now presettable alongside its siblings.">percussion<span class="rw"><input type="range" id="mp-mixPercussion" min="0" max="2" value="1" step="0.01" /><input type="number" id="mp-mixPercussion-n" min="0" max="2" value="1" step="0.01" /></span></label>
+          <label title="The final output trim, after every channel and the leveler/limiter.">master<span class="rw"><input type="range" id="mp-mixMaster" min="0" max="1" value="0.45" step="0.01" /><input type="number" id="mp-mixMaster-n" min="0" max="1" value="0.45" step="0.01" /></span></label>
+
+          <div class="timbre-group-label">flute low-mid boost (targeted register presence, not a tone-color change)</div>
+          <label title="Center frequency of the flute's own low-mid boost -- broad (Q 0.8), aimable, sitting downstream of every timbre param so it never touches the approved growl/formant character.">low-mid center (Hz)<span class="rw"><input type="range" id="mp-mixFluteLowMidHz" min="150" max="900" value="400" step="10" /><input type="number" id="mp-mixFluteLowMidHz-n" min="150" max="900" value="400" step="10" /></span></label>
+          <label title="How much boost at that center frequency.">low-mid boost (dB)<span class="rw"><input type="range" id="mp-mixFluteLowMidDb" min="0" max="12" value="5" step="0.5" /><input type="number" id="mp-mixFluteLowMidDb-n" min="0" max="12" value="5" step="0.5" /></span></label>
+
+          <div class="timbre-group-label">leveler (slow, musical loudness-evening -- distinct from the existing fast peak-safety limiter, which is untouched)</div>
+          <label title="0 = fully transparent (no compression at all). 1 = a real, audible even-out of overall level, with makeup gain restoring what the compression removes.">leveler amount<span class="rw"><input type="range" id="mp-mixLevelerAmount" min="0" max="1" value="0.35" step="0.01" /><input type="number" id="mp-mixLevelerAmount-n" min="0" max="1" value="0.35" step="0.01" /></span></label>
         </div>
       </details>
 

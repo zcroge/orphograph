@@ -1,7 +1,7 @@
 import { deriveTrace, invalidRanges } from "./trace.js";
 import { buildProcession, describeSteps, ROTATION_SPOKE_SHIFT } from "./transform.js";
 import { hzForSpoke, PLACEHOLDER_SPOKE_OF, ringForLetter } from "./letters.js";
-import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS, DEFAULT_PERCUSSION_PARAMS } from "./synth.js";
+import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS, DEFAULT_PERCUSSION_PARAMS, DEFAULT_MIX_PARAMS } from "./synth.js";
 import { Sequencer } from "./sequencer.js";
 import { MidiBridge } from "./midi.js";
 import { WheelView, DEFAULT_VIEW_PARAMS } from "./view.js";
@@ -1025,6 +1025,37 @@ render();
 // has already run and set whatever `title` attributes it's going to set.
 setAdvancedMode(storedAdvancedMode);
 
+// Mixer meters -- five small bars (drone/note/flute/percussion/master)
+// plus a clip indicator, read from audio.mixMeterLevels() (synth.js).
+// Declared here, ahead of tickRate's own first (synchronous, module-load-
+// time) call below, rather than down by the mixer panel's wireTimbrePanel
+// call -- these are plain $() lookups with no dependency on that wiring,
+// and tickRate's very first invocation needs them already initialized.
+// Called from tickRate's own rAF chain (see that call site's comment);
+// skipped entirely while the panel is closed or before the audio graph
+// exists, so this never does real work when nobody can see it.
+const mixMeterPanel = $("mix-meter-panel");
+const mixMeterBars = {
+  drone: $("mix-meter-drone"),
+  note: $("mix-meter-note"),
+  flute: $("mix-meter-flute"),
+  percussion: $("mix-meter-percussion"),
+  master: $("mix-meter-master"),
+};
+const mixMeterClip = $("mix-meter-clip");
+// RMS of a healthy mixed signal rarely clears ~0.3 -- scaled so the bars
+// use their visual range meaningfully instead of sitting mostly empty.
+const MIX_METER_RMS_TO_WIDTH = 2.6;
+function drawMixMeters() {
+  if (!audio.ctx || !mixMeterPanel.open) return;
+  const levels = audio.mixMeterLevels();
+  for (const key of Object.keys(mixMeterBars)) {
+    const pct = Math.min(100, levels[key] * MIX_METER_RMS_TO_WIDTH * 100);
+    mixMeterBars[key].style.width = `${pct}%`;
+  }
+  mixMeterClip.classList.toggle("clipping", levels.clipping);
+}
+
 function tickRate() {
   // Standardized master tempo, in BPM (wheel.js -- 12/8 meter, already
   // law-declared by the-codex-v1.md's own "onset = spoke in 12-pulse"
@@ -1039,6 +1070,11 @@ function tickRate() {
   // See convergenceAmplitude's own comment -- shared with the trace
   // echoes' own brightness/color modulation now.
   audio.setPercussionDensity(convergenceAmplitude());
+  // Mixer meters -- riding this SAME rAF chain rather than a second loop
+  // (see the removed duplicate-render-loop comment further down in this
+  // file for exactly why that's a real regression class here). Cheap
+  // no-op when the panel is closed or the audio graph doesn't exist yet.
+  drawMixMeters();
   // render() runs every animation frame here (not just once per pulse via
   // onPulse) so the tracer's own glide and each dial's own settle-ease
   // both stay genuinely continuous, even though the dials themselves only
@@ -1543,6 +1579,7 @@ const DRONE_PANEL_KEYS = [
 ];
 const VIEW_PANEL_KEYS = Object.keys(DEFAULT_VIEW_PARAMS);
 const PERCUSSION_PANEL_KEYS = Object.keys(DEFAULT_PERCUSSION_PARAMS);
+const MIX_PANEL_KEYS = Object.keys(DEFAULT_MIX_PARAMS);
 
 wireTimbrePanel({
   category: "note",
@@ -1598,6 +1635,23 @@ wireTimbrePanel({
   saveBtnId: "percussion-preset-save",
   deleteBtnId: "percussion-preset-delete",
   resetBtnId: "percussion-preset-reset",
+});
+
+// The mixer -- "a few more elegantly designed levers" for overall sound
+// balancing. Same wireTimbrePanel reuse as every panel above; replaces the
+// old standalone percussion-level slider (mixPercussion now covers it,
+// presettable alongside its siblings instead of living outside the preset
+// system).
+wireTimbrePanel({
+  category: "mix",
+  idPrefix: "mp",
+  keys: MIX_PANEL_KEYS,
+  setParam: (key, value) => audio.setMixParam(key, value),
+  defaults: DEFAULT_MIX_PARAMS,
+  presetSelectId: "mix-preset-select",
+  saveBtnId: "mix-preset-save",
+  deleteBtnId: "mix-preset-delete",
+  resetBtnId: "mix-preset-reset",
 });
 
 // Real, named kits (character starting points, not the generic save/load
@@ -1665,6 +1719,7 @@ $("export-settings").addEventListener("click", () => {
     drone: currentCategoryValues("dp", DRONE_PANEL_KEYS),
     view: currentCategoryValues("vp", VIEW_PANEL_KEYS),
     percussion: currentCategoryValues("pp", PERCUSSION_PANEL_KEYS),
+    mix: currentCategoryValues("mp", MIX_PANEL_KEYS),
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -1691,6 +1746,7 @@ $("import-settings-file").addEventListener("change", async (e) => {
     apply("dp", DRONE_PANEL_KEYS, data.drone);
     apply("vp", VIEW_PANEL_KEYS, data.view);
     apply("pp", PERCUSSION_PANEL_KEYS, data.percussion);
+    apply("mp", MIX_PANEL_KEYS, data.mix);
   } catch (err) {
     alert("Couldn't read that settings file: " + err.message);
   }
@@ -1798,16 +1854,11 @@ function applyTierEmphasis(value) {
 applyTierEmphasis(parseFloat($("tier-emphasis").value));
 $("tier-emphasis").addEventListener("input", (e) => applyTierEmphasis(parseFloat(e.target.value)));
 
-// Resultant-rhythm percussion's own level -- same pattern as tier-emphasis
-// above, wired straight to synth.js's own live setter (this one already
-// has to survive ensureContext not having run yet, hence setPercussionLevel
-// itself, unlike tierEmphasis which is a bare local read by main.js).
-function applyPercussionLevel(value) {
-  audio.setPercussionLevel(value);
-  $("percussion-level-readout").textContent = value.toFixed(2);
-}
-applyPercussionLevel(parseFloat($("percussion-level").value));
-$("percussion-level").addEventListener("input", (e) => applyPercussionLevel(parseFloat(e.target.value)));
+// Resultant-rhythm percussion's own level used to live here as a standalone
+// slider (applyPercussionLevel/setPercussionLevel) -- retired in favor of
+// the mixer's mixPercussion (see the wireTimbrePanel({category: "mix", ...})
+// call above), which gives it a presettable home next to the other channel
+// faders instead of living outside the preset system.
 
 // Vibe presets -- "the most intuitive, plug-and-play experience... the
 // same underlying beat and tempo layering could make something like

@@ -199,6 +199,27 @@ const THROAT_HARMONICS = [
   { n: 8, amp: 0.16, detune: -3 },
 ];
 
+// The mixer -- per-channel faders sitting downstream of each voice's own
+// timbre (busGain/whistleAmount stay where they are, in the drone-timbre
+// panel; those scale modulation depth along with level and are timbre-
+// internal, not faders -- see setDroneParam), a targeted low-mid boost for
+// the flute (the register the recent de-harshing pass's growl reduction
+// pulled level from -- see fluteLowMid/ensureContext), and a leveler
+// distinct from the existing peak-safety limiter (that one stays a fast
+// clip guard; this one is a slow, musical "even things out" control that
+// is a genuine no-op at 0). Same "factory default" pattern as every other
+// DEFAULT_*_PARAMS export here.
+export const DEFAULT_MIX_PARAMS = {
+  mixDrone: 1,
+  mixNote: 1,
+  mixFlute: 1.45,
+  mixPercussion: 1,
+  mixMaster: 0.45,
+  mixFluteLowMidHz: 400,
+  mixFluteLowMidDb: 5,
+  mixLevelerAmount: 0.35,
+};
+
 // Defaults exported so a "factory default" preset can always be reconstructed
 // (see timbrePresets.js) without duplicating these numbers a second time.
 export const DEFAULT_NOTE_PARAMS = {
@@ -947,18 +968,20 @@ export class OrphographAudio {
     // engaged the first time the graph is built.
     this._fluteSoloOn = false;
     // Resultant-rhythm percussion engine -- see playPercussionHit and
-    // _percussionGate (ensureContext). A level, not a mute, so it can be
-    // tucked under or brought forward by ear once heard, same "read-write,
-    // live-tunable" pattern as every other engine parameter here.
+    // _percussionGate (ensureContext). Its level now lives in the mixer as
+    // mixPercussion (DEFAULT_MIX_PARAMS/setMixParam) rather than a
+    // standalone field -- the old dedicated _percussionLevel/
+    // setPercussionLevel were retired once the mixer gave this same lever
+    // a presettable home next to its siblings.
     // "Can't really hear any percussion" -- 0.7 was never checked against
     // the drone's own real aggregate level (the 16-partial DRONE_HARMONICS
     // stack sums to ~3.78 linearly, x busGain 0.3 ~= 1.13 into the bus,
     // then a further +9dB lowshelf below 140Hz -- exactly the kick's own
     // 150->50Hz sweep range). At 0.7, the kick's own peak (0.9 x 0.7 =
     // 0.63) never even matched that, let alone cleared it under masking.
-    // Raised to 1.0 (max) here; the individual hit gains below were also
-    // raised for real margin, not just "higher."
-    this._percussionLevel = 1.0;
+    // Raised to 1.0 (max, now mixPercussion's own default) here; the
+    // individual hit gains below were also raised for real margin, not
+    // just "higher."
     // "Ebbing and flowing with processions/across the full arc of
     // procession" -- density (not level) is how often the resultant-
     // rhythm kit actually fires, fed live from main.js's tickRate loop
@@ -1053,6 +1076,14 @@ export class OrphographAudio {
     // edit (see main.js's PERCUSSION_KIT_PRESETS), not a code change.
     this.percussionParams = { ...DEFAULT_PERCUSSION_PARAMS };
 
+    // Mixer parameters -- see DEFAULT_MIX_PARAMS. Same live-tunable,
+    // read-write pattern as noteParams/percussionParams; pushed onto the
+    // real channel gain nodes by setMixParam once ensureContext has built
+    // them (harmless before that -- setMixParam no-ops on the AudioParam
+    // side and just remembers the value, same guard as setPercussionLevel
+    // always used).
+    this.mixParams = { ...DEFAULT_MIX_PARAMS };
+
     // Drone-timbre parameters -- same "read-write, not read-only" deal as
     // noteParams, but the drone is a long-lived running graph rather than a
     // one-shot note, so setDroneParam (below) also pushes changes into the
@@ -1135,6 +1166,82 @@ export class OrphographAudio {
 
   setPercussionParam(key, value) {
     if (this.percussionParams && key in this.percussionParams) this.percussionParams[key] = value;
+  }
+
+  // The mixer -- see DEFAULT_MIX_PARAMS. Always remembers the value (so
+  // wireTimbrePanel's module-load-time apply, before any user gesture/
+  // ensureContext, is harmless -- same guard setPercussionLevel always
+  // used); pushes it onto the real channel node live once the audio graph
+  // exists.
+  setMixParam(key, value) {
+    if (!(key in this.mixParams)) return;
+    this.mixParams[key] = value;
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const glide = (param, v) => param.setTargetAtTime(v, now, 0.05);
+    switch (key) {
+      case "mixDrone": glide(this._chanDrone.gain, value); break;
+      case "mixNote": glide(this._chanNote.gain, value); break;
+      case "mixFlute": glide(this._chanFlute.gain, value); break;
+      case "mixPercussion": glide(this._percussionGate.gain, value); break;
+      case "mixMaster": glide(this.master.gain, value); break;
+      case "mixFluteLowMidHz": glide(this._fluteLowMid.frequency, value); break;
+      case "mixFluteLowMidDb": glide(this._fluteLowMid.gain, value); break;
+      case "mixLevelerAmount": this._applyLevelerAmount(value); break;
+    }
+  }
+
+  // One lever driving threshold+ratio+makeup together -- see the leveler's
+  // own comment in ensureContext for why (0 must be a true no-op, 1 a real
+  // even-out, and turning it up shouldn't just make everything quieter).
+  // Threshold -6dB..-24dB, ratio 1..4, both linear in `amount`; makeup
+  // gain approximates the dB the compressor removes at a signal that's
+  // already sitting AT threshold (a reasonable, simple stand-in -- exact
+  // makeup depends on program material, which this can't know in advance).
+  _applyLevelerAmount(amount) {
+    if (!this.ctx || !this._leveler) return;
+    const now = this.ctx.currentTime;
+    const glide = (param, v) => param.setTargetAtTime(v, now, 0.05);
+    const threshold = -6 + amount * -18; // -6 -> -24
+    const ratio = 1 + amount * 3; // 1 -> 4
+    glide(this._leveler.threshold, threshold);
+    glide(this._leveler.ratio, ratio);
+    const reductionDb = Math.max(0, -threshold) * (1 - 1 / ratio);
+    const makeupGain = Math.pow(10, (reductionDb * 0.6) / 20);
+    glide(this._levelerMakeup.gain, makeupGain);
+  }
+
+  // Read fresh whenever the mixer panel is open (main.js's tickRate loop --
+  // no separate polling loop, see that call site's own comment on why).
+  // RMS over the analyser's current time-domain buffer, one per channel
+  // plus master; `clipping` is a simple peek at whether the master's own
+  // samples are hugging full scale, a cheap proxy for "the limiter is
+  // working hard right now."
+  mixMeterLevels() {
+    const rms = (analyser) => {
+      if (!analyser) return 0;
+      const buf = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      return Math.sqrt(sum / buf.length);
+    };
+    const masterBuf = this._meterMaster ? new Float32Array(this._meterMaster.fftSize) : null;
+    let clipping = false;
+    if (masterBuf) {
+      this._meterMaster.getFloatTimeDomainData(masterBuf);
+      for (let i = 0; i < masterBuf.length; i++) {
+        if (Math.abs(masterBuf[i]) >= 0.99) { clipping = true; break; }
+      }
+    }
+    return {
+      drone: rms(this._meterDrone),
+      note: rms(this._meterNote),
+      flute: rms(this._meterFlute),
+      percussion: rms(this._meterPercussion),
+      master: rms(this._meterMaster),
+      clipping,
+    };
   }
 
   // The ONE place the flute's un-folded register formula lives -- every
@@ -1640,16 +1747,6 @@ export class OrphographAudio {
     this._nonFluteGate.gain.setTargetAtTime(this._fluteSoloOn ? 0 : 1, now, 0.05);
   }
 
-  // Resultant-rhythm percussion's own level -- see _percussionGate
-  // (ensureContext) and playPercussionHit. Same live-tunable pattern as
-  // setFluteSolo above.
-  setPercussionLevel(level) {
-    this._percussionLevel = Math.max(0, Math.min(1, level));
-    if (!this.ctx || !this._percussionGate) return;
-    const now = this.ctx.currentTime;
-    this._percussionGate.gain.setTargetAtTime(this._percussionLevel, now, 0.05);
-  }
-
   // Just a stored number -- no AudioParam, no scheduling, read fresh by
   // playPercussionHit's own accumulator gate at the moment of each real
   // hit. Deliberately NOT a scheduled/automated value (the exact class of
@@ -2023,17 +2120,40 @@ export class OrphographAudio {
       this.ctx = ctx;
 
       this.master = ctx.createGain();
-      this.master.gain.value = 0.45;
+      this.master.gain.value = this.mixParams.mixMaster;
+
+      // The leveler -- a genuine loudness-evener, distinct from the
+      // limiter below. Slow (80ms attack, 500ms release, 30dB knee) so it
+      // rides overall level rather than pumping on individual transients;
+      // driven by ONE lever (mixLevelerAmount, setMixParam) that ramps
+      // threshold/ratio together so 0 is truly transparent (ratio 1 = no
+      // compression at all) and 1 is a real, audible even-out. `makeup`
+      // restores the gain the compression stage removes so turning the
+      // leveler up doesn't just make everything quieter.
+      const leveler = ctx.createDynamicsCompressor();
+      leveler.threshold.value = -6;
+      leveler.ratio.value = 1;
+      leveler.knee.value = 30;
+      leveler.attack.value = 0.08;
+      leveler.release.value = 0.5;
+      const makeup = ctx.createGain();
+      makeup.gain.value = 1;
+      this.master.connect(leveler);
+      leveler.connect(makeup);
+      this._leveler = leveler;
+      this._levelerMakeup = makeup;
 
       // Bus limiter -- headroom so the drone (below) can be pushed for real
-      // presence/weight without risking harsh clipping on loud chords.
+      // presence/weight without risking harsh clipping on loud chords. Pure
+      // peak safety (3ms attack) -- the leveler above is where any real
+      // "even things out" tuning belongs; this stays untouched by it.
       const limiter = ctx.createDynamicsCompressor();
       limiter.threshold.value = -8; // was -12 -- was quietly absorbing small ring-balance changes
       limiter.knee.value = 6;
       limiter.ratio.value = 3;
       limiter.attack.value = 0.003;
       limiter.release.value = 0.25;
-      this.master.connect(limiter);
+      makeup.connect(limiter);
       limiter.connect(ctx.destination);
 
       // Synthetic convolution reverb, parallel send -- gives length/space
@@ -2062,16 +2182,67 @@ export class OrphographAudio {
       this._nonFluteGate.connect(this.dry);
       this._nonFluteGate.connect(this.reverbSend);
 
+      // The mixer -- per-instrument channel gains, one per voice family,
+      // sitting between each voice's own output and the gate/bus it already
+      // fed (see DEFAULT_MIX_PARAMS/setMixParam). chanDrone/chanNote feed
+      // INTO _nonFluteGate (so flute-solo still silences them exactly as
+      // before); chanFlute bypasses it exactly as whistleBox always has.
+      // _percussionGate itself doubles as the percussion channel -- it
+      // already did this job (see its own comment just below), so
+      // mixPercussion drives its existing gain rather than adding a
+      // redundant node.
+      this._chanDrone = ctx.createGain();
+      this._chanDrone.gain.value = this.mixParams.mixDrone;
+      this._chanDrone.connect(this._nonFluteGate);
+      this._chanNote = ctx.createGain();
+      this._chanNote.gain.value = this.mixParams.mixNote;
+      this._chanNote.connect(this._nonFluteGate);
+      this._chanFlute = ctx.createGain();
+      this._chanFlute.gain.value = this.mixParams.mixFlute;
+      this._chanFlute.connect(this.dry);
+      this._chanFlute.connect(this.reverbSend);
+
+      // A targeted low-mid boost for the flute -- the register the de-
+      // harshing pass's growl-amount reduction (see DEFAULT_DRONE_PARAMS)
+      // pulled real weight from. Broad (Q 0.8, deliberately not a narrow
+      // resonance -- that shape is exactly what caused the original
+      // harshness) and aimable (mixFluteLowMidHz/mixFluteLowMidDb) rather
+      // than fixed, so it can be tuned by ear against whatever the flute's
+      // tone currently is.
+      this._fluteLowMid = ctx.createBiquadFilter();
+      this._fluteLowMid.type = "peaking";
+      this._fluteLowMid.frequency.value = this.mixParams.mixFluteLowMidHz;
+      this._fluteLowMid.Q.value = 0.8;
+      this._fluteLowMid.gain.value = this.mixParams.mixFluteLowMidDb;
+      this._fluteLowMid.connect(this._chanFlute);
+
       // Resultant-rhythm percussion -- its own bus, deliberately NOT
       // routed through _nonFluteGate: "not tangled with the existing
       // solo/mute machinery" (flute-solo silences competing pitched
       // voices to judge the flute alone; percussion is a structural
       // layer, not a competing melodic voice, so it stays audible under
-      // flute-solo). One level control (setPercussionLevel), not a mute.
+      // flute-solo). Its level is mixPercussion (setMixParam) -- see the
+      // mixer comment above.
       this._percussionGate = ctx.createGain();
-      this._percussionGate.gain.value = this._percussionLevel;
+      this._percussionGate.gain.value = this.mixParams.mixPercussion;
       this._percussionGate.connect(this.dry);
       this._percussionGate.connect(this.reverbSend);
+
+      // Metering -- one small analyser per channel plus the master output,
+      // read by mixMeterLevels() (polled from main.js's existing tickRate
+      // rAF loop, not a new one). Time-domain only -- RMS/clip-peek is all
+      // the mixer panel needs, no need for an FFT.
+      const tapAnalyser = (node) => {
+        const a = ctx.createAnalyser();
+        a.fftSize = 512;
+        node.connect(a);
+        return a;
+      };
+      this._meterDrone = tapAnalyser(this._chanDrone);
+      this._meterNote = tapAnalyser(this._chanNote);
+      this._meterFlute = tapAnalyser(this._chanFlute);
+      this._meterPercussion = tapAnalyser(this._percussionGate);
+      this._meterMaster = tapAnalyser(this.master);
 
       // "Real royalty-free flute/drone/woodwind sound plate" -- see
       // _loadRealBreathBuffer. Fire-and-forget: the flute's breath source
@@ -2364,7 +2535,7 @@ export class OrphographAudio {
     const pan = { given: -0.5, received: 0, made: 0.5 }[ring] ?? 0;
     const panner = ctx.createStereoPanner();
     panner.pan.value = pan;
-    panner.connect(this._nonFluteGate);
+    panner.connect(this._chanNote);
 
     // A few cents of ring-tinted detune spread -- subtle, not a pitch
     // change (RING_OCTAVE_MULTIPLIER at the main.js call site already
@@ -2487,7 +2658,7 @@ export class OrphographAudio {
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.045);
     tap.connect(filter);
     filter.connect(gain);
-    gain.connect(this._nonFluteGate);
+    gain.connect(this._chanNote);
     tap.start(t0);
     tap.stop(t0 + 0.06);
   }
@@ -2961,7 +3132,7 @@ export class OrphographAudio {
 
       formantBlend.connect(moveFilter);
       moveFilter.connect(bassBoost);
-      bassBoost.connect(this._nonFluteGate);
+      bassBoost.connect(this._chanDrone);
 
       // Flute -- "one meandering flute drone/pad/melodic narrative," ONE
       // voice now (was three genuinely independent pipes, one per ring --
@@ -3248,8 +3419,7 @@ export class OrphographAudio {
       whistleBox.gain.value = dp.whistleBoxAmountDb;
       whistleChamberBank.output.connect(whistleBus);
       whistleBus.connect(whistleBox);
-      whistleBox.connect(this.dry);
-      whistleBox.connect(this.reverbSend);
+      whistleBox.connect(this._fluteLowMid);
 
       this._droneBaseHz = baseHz;
       // Scalars now, not ring-keyed -- one voice, one current chord-root/

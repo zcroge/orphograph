@@ -137,6 +137,58 @@ h1 { font-size: 20px; margin: 0 0 16px; color: var(--text); }
   border-radius: 3px;
 }
 
+/* Mixer meters -- see mixMeterLevels (synth.js) / drawMixMeters (main.js).
+   Plain width-scaled fills rather than a canvas, since five small bars
+   updated once a frame need nothing heavier. */
+.mix-meters {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mix-meter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.mix-meter-label {
+  width: 66px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.mix-meter-track {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.mix-meter-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--accent-received);
+  transition: width 0.05s linear;
+}
+.mix-meter-clip {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+  opacity: 0.35;
+}
+.mix-meter-clip.clipping {
+  color: var(--danger);
+  opacity: 1;
+}
+
 canvas {
   background: #08080b;
   border: 1px solid var(--border);
