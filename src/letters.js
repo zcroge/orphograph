@@ -327,6 +327,67 @@ export const TYPED_AS_OF = Object.fromEntries(
   Object.entries(SHORTHAND_OF).map(([shorthand, token]) => [token, shorthand])
 );
 
+// "A real physical keyboard... the better mapping is DIRECT/positional (a
+// physical key placed where that letter actually sits)" -- SHORTHAND_OF's
+// own comment above named this as the eventual next step; this is it. 21
+// of the 38 real letter tokens already ARE a single Latin letter (A B D E
+// F G H I K L M N O P R S T V W Y Z -- not listed here, since their own
+// token already IS the QWERTY key), leaving exactly five free/unused
+// Latin letters -- C, J, Q, U, X -- for the highest-value remaining
+// tokens with no natural 1:1 match, plus a shift layer for the rest,
+// paired with a phonetically/thematically related base letter so the
+// whole scheme is one learnable rule ("shift = this letter's compound/
+// cousin sound") rather than arbitrary chords. See main.js's `keydown`
+// handler on #input for where this is consumed.
+//
+// Unshifted free-key reasoning: C=CH (already spelled with a C), J=JH
+// (English "J" already sounds like this), X=H.x (X IS the IPA symbol for
+// this exact sound), Q=OO (Q's rounded bowl as a weak visual cue for a
+// rounded back vowel), U=OE (English "U" already commonly spells this
+// exact schwa/stressed-uh sound -- cup, run, sun).
+//
+// Shift-layer reasoning: TH/DH/SH/ZH mirror their own base letter's
+// fricative/voiced-pair cousin; H.c takes shift+H since H.x already owns
+// unshifted X; ŋ takes shift+N ("NG" already starts with N); AE/EA take
+// shift+A/shift+E (each starts with that letter); AI/AO take shift+I/
+// shift+O (their own written OFFGLIDE letter, not the onset -- "the
+// offglide is already written by the second glyph," per this token's own
+// census note); OI takes shift+Q, rounding out a "Q/U own the awkward
+// vowels" cluster with OO/OE.
+//
+// Deliberately absent: vowel.nub/vowel.horizontal. Both are still
+// genuinely undetermined (no settled sound value yet, "naming still
+// open") -- a mnemonic key position would be arbitrary. They stay
+// reachable exactly as before, via VN/VH (SHORTHAND_OF above).
+export const QWERTY_GLYPH_MAP = {
+  a: { base: "A", shift: "AE" },
+  b: { base: "B", shift: null },
+  c: { base: "CH", shift: null },
+  d: { base: "D", shift: "DH" },
+  e: { base: "E", shift: "EA" },
+  f: { base: "F", shift: null },
+  g: { base: "G", shift: null },
+  h: { base: "H", shift: "H.c" },
+  i: { base: "I", shift: "AI" },
+  j: { base: "JH", shift: null },
+  k: { base: "K", shift: null },
+  l: { base: "L", shift: null },
+  m: { base: "M", shift: null },
+  n: { base: "N", shift: "ŋ" },
+  o: { base: "O", shift: "AO" },
+  p: { base: "P", shift: null },
+  q: { base: "OO", shift: "OI" },
+  r: { base: "R", shift: null },
+  s: { base: "S", shift: "SH" },
+  t: { base: "T", shift: "TH" },
+  u: { base: "OE", shift: null },
+  v: { base: "V", shift: null },
+  w: { base: "W", shift: null },
+  x: { base: "H.x", shift: null },
+  y: { base: "Y", shift: null },
+  z: { base: "Z", shift: "ZH" },
+};
+
 // Resolves EITHER a formal token (I, SH, "H.c", ...) or a shorthand alias
 // (NG, HC, ...) to the one canonical formal token everything downstream
 // (spoke/ring/legend lookups, keyboard highlighting) actually keys on.

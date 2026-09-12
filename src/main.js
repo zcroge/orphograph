@@ -1,6 +1,6 @@
-import { deriveTrace, invalidRanges } from "./trace.js";
+import { deriveTrace, invalidRanges, annotateInputForDisplay } from "./trace.js";
 import { buildProcession, describeSteps, ROTATION_SPOKE_SHIFT } from "./transform.js";
-import { hzForSpoke, PLACEHOLDER_SPOKE_OF, ringForLetter } from "./letters.js";
+import { hzForSpoke, PLACEHOLDER_SPOKE_OF, ringForLetter, QWERTY_GLYPH_MAP } from "./letters.js";
 import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS, DEFAULT_PERCUSSION_PARAMS, DEFAULT_MIX_PARAMS } from "./synth.js";
 import { Sequencer } from "./sequencer.js";
 import { MidiBridge } from "./midi.js";
@@ -10,6 +10,7 @@ import { loadAllPhrases, addPhrase, deletePhrase, isDefaultPhrase } from "./phra
 import { loadPresets, savePreset, deletePreset, loadLastSession, saveLastSession } from "./timbrePresets.js";
 import { PictographKeyboard } from "./keyboard.js";
 import { CompactLegend } from "./compactLegend.js";
+import { pixelGlyphSVGMarkup } from "./glyphRender.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -80,18 +81,40 @@ document.addEventListener("keydown", (e) => {
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+// "Let's use the pixel font in place of the orphograph text entry" -- each
+// RECOGNIZED token renders as its real pixel-font glyph (glyph-studio's
+// own 16x16 bitmap, see glyphRender.js's pixelGlyphSVGMarkup) instead of
+// its plain ASCII name; hyphens/spaces and genuinely unrecognized text
+// stay exactly as before (plain characters, red for unrecognized). Each
+// glyph is wrapped in a span sized to EXACTLY `token.length` monospace
+// character-widths (`ch` units, the same unit the real input's own font-
+// family: monospace already uses) -- required so the backdrop's total
+// width for any given text prefix stays byte-identical to the real
+// (invisible) input's own width at that same length; without this the
+// visible caret (the only non-transparent part of the real input, see
+// style.css) would drift out of alignment with what's drawn behind it
+// the moment a multi-character token got replaced by a differently-sized
+// image. Falls back to plain text for any token with no pixel data yet.
 function updateInputBackdrop() {
   const input = $("input");
   const text = input.value;
-  const ranges = invalidRanges(text);
+  const segments = annotateInputForDisplay(text);
   let html = "";
-  let i = 0;
-  ranges.forEach(({ start, end }) => {
-    html += escapeHtml(text.slice(i, start));
-    html += `<span class="invalid-char">${escapeHtml(text.slice(start, end))}</span>`;
-    i = end;
+  segments.forEach(({ start, end, kind, token }) => {
+    const raw = text.slice(start, end);
+    if (kind === "invalid") {
+      html += `<span class="invalid-char">${escapeHtml(raw)}</span>`;
+      return;
+    }
+    if (kind === "valid") {
+      const svg = pixelGlyphSVGMarkup(token, { heightPx: 18 });
+      if (svg) {
+        html += `<span class="pixel-glyph-slot" style="width:${raw.length}ch">${svg}</span>`;
+        return;
+      }
+    }
+    html += escapeHtml(raw);
   });
-  html += escapeHtml(text.slice(i));
   $("input-backdrop").innerHTML = html;
   $("input-backdrop").scrollLeft = input.scrollLeft;
 }
@@ -155,11 +178,70 @@ keyboard.onKeyClick = insertLetter;
 
 const legendGrid = new CompactLegend($("legend-grid"));
 legendGrid.onKeyClick = insertLetter;
-$("kbd-space").addEventListener("click", () => {
+function insertWordBoundary() {
   const input = $("input");
   if (input.value !== "" && !input.value.endsWith(" ")) input.value += " ";
   input.focus();
   updateInputBackdrop();
+}
+$("kbd-space").addEventListener("click", insertWordBoundary);
+
+// The counterpart insertLetter never needed -- the on-screen keyboard has
+// no delete key. Removes the LAST token (and its own leading separator,
+// if any), not one raw character -- "the string is the whole source of
+// truth" model insertLetter already uses, just run in reverse. A trailing
+// word-boundary space counts as its own removable "token" here (undoes
+// insertWordBoundary), same granularity a direct-glyph-typing backspace
+// should have.
+function removeLastToken() {
+  const input = $("input");
+  const value = input.value;
+  if (value === "") return;
+  if (value.endsWith(" ")) {
+    input.value = value.slice(0, -1);
+  } else {
+    const lastSep = Math.max(value.lastIndexOf("-"), value.lastIndexOf(" "));
+    input.value = lastSep === -1 ? "" : value.slice(0, lastSep);
+  }
+  input.focus();
+  updateInputBackdrop();
+}
+
+// "A direct keyboard input system for our new glyph set, with an
+// intuitive two-layer system... key layout should be as close to
+// original qwerty equivalents as possible." See letters.js's
+// QWERTY_GLYPH_MAP for the full mapping/reasoning. Scoped to a keydown
+// listener on #input itself (not document-level) so it can never touch
+// any other field or the existing Ctrl+Alt+A advanced-mode hotkey, and
+// is gated behind its own toggle so the field's plain literal-text
+// editing (hand-editing an exact token string, pasting a saved phrase)
+// stays available exactly as before whenever the mode is off. Reuses
+// insertLetter/insertWordBoundary/removeLastToken -- the SAME functions
+// the on-screen keyboard's clicks already call -- so a key press and a
+// tile click are indistinguishable to everything downstream.
+let directGlyphTyping = true;
+$("input").addEventListener("keydown", (e) => {
+  if (!directGlyphTyping) return;
+  if (e.ctrlKey || e.altKey || e.metaKey) return; // leave every modifier combo (incl. Ctrl+Alt+A) alone
+  if (e.key === "Backspace") {
+    e.preventDefault();
+    removeLastToken();
+    return;
+  }
+  if (e.key === " ") {
+    e.preventDefault();
+    insertWordBoundary();
+    return;
+  }
+  const mapping = QWERTY_GLYPH_MAP[e.key.toLowerCase()];
+  if (!mapping) return; // not a mapped letter key -- leave arrows/Tab/Enter/etc. to native behavior
+  const token = e.shiftKey ? mapping.shift : mapping.base;
+  if (!token) return; // this key has no shift-layer token -- fall through (browser default, harmless)
+  e.preventDefault();
+  insertLetter(token);
+});
+$("direct-glyph-typing").addEventListener("change", (e) => {
+  directGlyphTyping = e.target.checked;
 });
 
 // Drone always anchors on O (spoke 7) -- see synth.js/README for why.

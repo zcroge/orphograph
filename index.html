@@ -17,10 +17,14 @@
     <div class="panel">
       <label>
         Hyphen joins letters in a word (no rest). Space marks a word boundary (inserts a rest). e.g. <code>SH-O-R-E K-T</code>
-        <div class="input-highlight-wrap" title="Characters shown in red aren't recognized phonetic tokens (see README.md) -- a live preview of what play would flag/skip, so you can see the alphabet's actual sound coverage as you type instead of only after pressing play.">
+        <div class="input-highlight-wrap" title="Characters shown in red aren't recognized phonetic tokens (see README.md) -- a live preview of what play would flag/skip, so you can see the alphabet's actual sound coverage as you type instead of only after pressing play. Recognized tokens render as their real pixel-font glyph here.">
           <div id="input-backdrop" class="input-backdrop" aria-hidden="true"></div>
           <input id="input" type="text" value="O-R-F-O-G-R-AE-F" spellcheck="false" autocomplete="off" />
         </div>
+      </label>
+
+      <label class="inline" title="A direct QWERTY-to-glyph keyboard layer, two layers (unshifted/shift) -- most letters already sit on their own natural key (K, T, S, N, ...); the five otherwise-unused keys (C/J/Q/U/X) and the shift layer cover the rest (digraphs, compound consonants, vowel ligatures). See README.md for the full mapping. Off = the field behaves exactly like a normal text box (hand-edit an exact token string, paste a saved phrase).">
+        <input type="checkbox" id="direct-glyph-typing" checked /> direct glyph typing (QWERTY -&gt; new alphabet)
       </label>
 
       <div class="row advanced-only">

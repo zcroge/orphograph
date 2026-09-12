@@ -257,6 +257,30 @@ input[type="text"] {
   color: var(--danger);
   font-weight: 700;
 }
+/* Pixel-font glyph slot -- see main.js's updateInputBackdrop. Width is
+   set inline per-token (N ch, matching that token's own character count
+   in the real, invisible input beneath) so the backdrop's cumulative
+   width never drifts from the real input's -- the one thing this layout
+   cannot get wrong, since the real input's caret alignment depends on
+   it. display:inline-block/line-height:0 keep the SVG from adding its
+   own extra line-box height on top of the surrounding monospace text. */
+.pixel-glyph-slot {
+  display: inline-block;
+  height: 1.1em;
+  line-height: 0;
+  vertical-align: middle;
+  overflow: hidden;
+}
+/* Fills the slot's exact box (width fixed per-token in ch units by
+   main.js, height fixed above) rather than staying square -- see
+   pixelGlyphSVGMarkup's own comment on preserveAspectRatio="none" for
+   why a single-character token's glyph is deliberately narrow/tall
+   instead of getting cropped. */
+.pixel-glyph-slot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .input-highlight-wrap input#input {
   position: relative;
   display: block;

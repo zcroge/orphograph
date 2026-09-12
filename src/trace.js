@@ -149,3 +149,52 @@ export function invalidRanges(inputText) {
   }
   return ranges;
 }
+
+// Same walk as invalidRanges above (kept as its own function rather than
+// refactored into a shared helper, so the red-highlight path this session
+// already ships stays untouched), but annotates the WHOLE string --
+// covers every character, not just the bad ones -- for main.js's pixel-
+// font input display (updateInputBackdrop): each segment is either a
+// recognized token (with its resolved canonical name, so the display can
+// look up its pixel glyph), an unrecognized run (same "invalid" meaning
+// invalidRanges already flags), or plain text (hyphens/spaces/whitespace
+// -- literal characters with no token of their own).
+export function annotateInputForDisplay(inputText) {
+  const segments = []; // { start, end, kind: "valid"|"invalid"|"plain", token? }
+  let cursor = 0;
+  const wordRe = /\S+/g;
+  let m;
+  while ((m = wordRe.exec(inputText))) {
+    const word = m[0];
+    const wordStart = m.index;
+    if (wordStart > cursor) segments.push({ start: cursor, end: wordStart, kind: "plain" });
+    if (word.includes("-")) {
+      let offset = 0;
+      const pieces = word.split("-");
+      pieces.forEach((piece, idx) => {
+        const pieceStart = wordStart + offset;
+        if (piece.length) {
+          const token = canonicalToken(piece);
+          if (token === undefined) segments.push({ start: pieceStart, end: pieceStart + piece.length, kind: "invalid" });
+          else segments.push({ start: pieceStart, end: pieceStart + piece.length, kind: "valid", token });
+        }
+        offset += piece.length;
+        if (idx < pieces.length - 1) {
+          segments.push({ start: wordStart + offset, end: wordStart + offset + 1, kind: "plain" }); // the hyphen itself
+          offset += 1;
+        }
+      });
+    } else {
+      let offset = 0;
+      tokenizeWord(word).forEach((t) => {
+        const start = wordStart + offset;
+        const end = start + t.raw.length;
+        segments.push(t.unknown ? { start, end, kind: "invalid" } : { start, end, kind: "valid", token: canonicalToken(t.raw) });
+        offset += t.raw.length;
+      });
+    }
+    cursor = wordStart + word.length;
+  }
+  if (cursor < inputText.length) segments.push({ start: cursor, end: inputText.length, kind: "plain" });
+  return segments;
+}
