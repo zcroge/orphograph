@@ -1569,13 +1569,14 @@ const DRONE_PANEL_KEYS = [
   "whistleArticulationPulseFraction", "whistleBreathToneCoupling", "whistleArticulationAmount",
   "whistleBrightnessTempoSensitivity", "whistleBrightnessReferencePps", "whistleToneColorRatio",
   "whistleChamberAmountDb", "whistleChamberQ", "whistleChamberModes",
-  "whistleGrowlAmount", "whistleGrowlF1Hz", "whistleGrowlF2Hz", "whistleGrowlQ",
-  "whistleGrowlWanderHz", "whistleGrowlWanderDepth", "whistleGrowlSaturationAmount",
   "whistleDroneWaveCyclesPerRingPulse", "whistleDroneWaveDepth",
-  "whistleThroatAmount", "whistleThroatSubharmonicAmount",
   "whistleBoxHz", "whistleBoxQ", "whistleBoxAmountDb",
+  "whistlePedalLevel", "whistlePedalGlideMs", "whistleBreathLeadFraction",
   "moveFilterHz", "moveFilterPulsesPerCycle", "moveFilterDepthHz", "bassBoostHz", "bassBoostDb",
   "droneSubharmonicAmount", "droneSaturationAmount",
+  "droneGrowlAmount", "droneGrowlF1Hz", "droneGrowlF2Hz", "droneGrowlQ",
+  "droneGrowlWanderHz", "droneGrowlWanderDepth", "droneGrowlSaturationAmount",
+  "droneThroatAmount", "droneThroatSubharmonicAmount",
 ];
 const VIEW_PANEL_KEYS = Object.keys(DEFAULT_VIEW_PARAMS);
 const PERCUSSION_PANEL_KEYS = Object.keys(DEFAULT_PERCUSSION_PARAMS);
