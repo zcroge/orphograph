@@ -49,6 +49,7 @@
 
 import { SPOKE_COUNT, PULSES_PER_BEAT } from "./wheel.js";
 import { ringForLetter } from "./letters.js";
+import { relate } from "./motif.js";
 
 // SPOKE_COUNT / PULSES_PER_BEAT = 4 -- not a chosen number, the same
 // derived-identity pattern BREATH_CYCLE_PULSES (SPOKE_COUNT *
@@ -236,4 +237,194 @@ export function stageForIntensity(I) {
 export function describeArc(arc, I) {
   const stage = stageForIntensity(I);
   return `W=${arc.W} · weight I=${I.toFixed(2)} · shape ${arc.yati} · ceiling ${arc.ceiling.toFixed(2)} · stage ${stage} (${ARC_STAGES[stage].name})`;
+}
+
+// Form traversal and developing variation -- "a rich, stylized pattern...
+// informed by the content of the pattern" needs an actual FORM, not just
+// a louder/quieter arc. `classifyYati` (above) is a real, content-derived
+// reading of the phrase's own word-length sequence, and until now it fed
+// nothing but this readout string -- a real classification computed and
+// then thrown away. This gives it the structural job it was always
+// shaped for: yati selects which of six named, real compositional
+// TRAVERSAL STRATEGIES deploys the phrase's own words across the arc.
+// Each strategy returns an ordered list of "subsets" (word-index arrays)
+// -- one subset per pass -- so a loop through a phrase becomes a FORM.
+//
+// All six degrade to a single one-word subset at W<=1 (no special case
+// needed): a phrase with nothing to develop just states its one word,
+// forever, matching Phase 1's own "a one-word phrase cannot develop
+// because it contains no relations to develop by."
+function sama(W) {
+  return [Array.from({ length: W }, (_, i) => i)]; // "equal" -- the same full pass every time, ostinato/colotomic loop
+}
+function srotovaha(W) {
+  const subsets = [];
+  for (let size = 1; size <= W; size++) subsets.push(Array.from({ length: size }, (_, i) => i));
+  return subsets; // "expanding" -- Glass additive process
+}
+function gopuccha(W) {
+  const subsets = [];
+  for (let size = W; size >= 1; size--) subsets.push(Array.from({ length: size }, (_, i) => i));
+  return subsets; // "contracting" -- Schoenbergian liquidation
+}
+function mridanga(W) {
+  return [...srotovaha(W), ...gopuccha(W).slice(1)]; // expand then contract -- arch form (the full-W peak isn't repeated)
+}
+function damaru(W) {
+  return [...gopuccha(W), ...srotovaha(W).slice(1)]; // contract then expand -- hourglass (the size-1 trough isn't repeated)
+}
+function vishama(W) {
+  const subsets = [];
+  for (let n = 0; n < W; n++) subsets.push(Array.from({ length: W }, (_, i) => (n + i) % W));
+  return subsets; // "irregular" -- Stravinsky rotational array: pass n starts at word n
+}
+const YATI_TRAVERSAL = { sama, srotovaha, gopuccha, mridanga, damaru, vishama };
+
+// The one entry point for "which words are in play on traversal pass N."
+// `yati` is one of classifyYati's own return values; unrecognized names
+// (there shouldn't be any -- classifyYati is exhaustive) fall back to
+// `sama`, the least eventful choice, rather than throwing.
+export function subsetsForTraversal(yati, W) {
+  if (W <= 0) return [[]];
+  const fn = YATI_TRAVERSAL[yati] || sama;
+  return fn(Math.max(1, Math.round(W)));
+}
+
+// The phrase's own measured transformation VOCABULARY -- every DISTINCT,
+// non-identity relation `relate` (motif.js) finds between CYCLICALLY
+// consecutive motifs (word i to word i+1, and -- the phrase's own
+// "return to start," the same relation the CADENCE structural function
+// measures -- the last word back to the first), deduplicated. This is
+// "the elementary motif around which bespoke riffs can be designed" made
+// literal: the transform applied at any structural juncture is one the
+// input itself already performs somewhere, never picked from a menu.
+// Cyclic, not just consecutive-pairs, because a W-word phrase's own
+// closed form has exactly W real relations to measure, not W-1 -- and
+// without the wrap-around relation, a 3-word phrase can only ever offer
+// 2 vocabulary members, capping development one step short of what the
+// phrase's own full cycle actually contains (verified directly: DOGMAN
+// SHORE K-T's wrap-around K-T->DOGMAN relation is a real, distinct T_0
+// best-fit with residual 0.43 -- not an exact repeat, so it's real
+// vocabulary, and it's what makes this phrase's own maxDepth reach 3).
+//
+// Only a LITERAL exact repeat (`residual === 0` AND `n === 0`) is
+// excluded -- it develops nothing. A best-fit rotation that happens to
+// land on n=0 despite a NONZERO residual is not an identity -- it means
+// "these sets overlap most without rotating, but they are not the same
+// set" -- and an exact mirror or exact non-zero rotation counts as real
+// vocabulary too, even though it's an EXACT match, because applying it
+// still changes what's heard.
+export function vocabularyOf(motifs) {
+  const vocab = [];
+  const seen = new Set();
+  const W = motifs.length;
+  for (let i = 0; i < W; i++) {
+    const j = (i + 1) % W;
+    if (i === j) continue; // W<=1 -- nothing to relate, empty vocabulary
+    const r = relate(motifs[i].pcSet, motifs[j].pcSet, {
+      orderedA: motifs[i].spokes,
+      orderedB: motifs[j].spokes,
+    });
+    if (!r) continue;
+    if (r.op.type === "rotate" && r.op.n === 0 && r.residual === 0) continue; // a literal exact repeat -- develops nothing
+    const key = JSON.stringify(r.op);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    vocab.push(r.op);
+  }
+  return vocab;
+}
+
+// Depth escalation: `traversal` is a 0-indexed lap count (main.js's own
+// given-ring onTraceLoop, already firing every real lap); `S` is the
+// traversal strategy's own subset count (subsetsForTraversal(...).length);
+// `maxDepth` is the vocabulary's own size (vocabularyOf(...).length) --
+// a phrase can never develop past the number of distinct relations it
+// actually contains. `DOGMAN SHORE K-T` (gopuccha, S=3) escalates
+// 0,0,0,1,1,1,2,2,2,3,3,3 across a 12-lap series -- a twelve-section form
+// from a three-word phrase, contracting in material (subset) while
+// escalating in transformation (depth), closing exactly when the
+// transposition series itself closes.
+export function depthAt(traversal, S, maxDepth) {
+  if (S <= 0) return 0;
+  return Math.min(maxDepth, Math.floor(Math.max(0, traversal) / S));
+}
+
+function opLabel(op) {
+  if (op.type === "rotate") return `T${op.n}`;
+  if (op.type === "mirror") return `I${op.n || 0}`;
+  if (op.type === "retrograde") return "R";
+  if (op.type === "retrograde-invert") return "RI";
+  return op.type;
+}
+
+// A live readout string -- "always show what was derived," same
+// convention describeArc/the scale field already follow.
+export function describeTraversal({ subsetIndex, S, depth, chain }) {
+  const chainLabel = chain.length ? chain.map(opLabel).join("+") : "prime";
+  return `pass ${subsetIndex + 1}/${S} · depth ${depth} · chain ${chainLabel}`;
+}
+
+// Five structural functions -- what a WORD *is* within the phrase's own
+// form, measured from `relate`'s own residual against a threshold
+// derived from the word's own size (theta_i = 1/cardinality(M_i): "one
+// element changed out of the cell's own size" -- a 2-note cell losing one
+// note is a different cell; a 6-note cell losing one note is the same
+// cell varied). Not a tuned constant -- it comes from the word being
+// judged, not a global knob.
+//
+// CADENCE takes precedence over every other label when it applies,
+// exactly like a real cadence overriding whatever harmonic function came
+// before it: either the word is literally the phrase's last (the form
+// has nowhere left to go), or it measures as an exact return to the
+// PHRASE'S OWN OPENING motif (residual 0 against M_0) -- "the form has
+// come home" is a real event even mid-phrase, the same *sam*/korvai
+// resolution Carnatic rhythm names.
+//
+// Verified against both of this project's own worked phrases: `DOGMAN
+// SHORE K-T` -> [STATEMENT, CONTRAST, CADENCE]; `PIK TAK SHOK KOT` ->
+// [STATEMENT, RESTATEMENT, DEVELOPMENT, CADENCE] -- a textbook four-bar
+// phrase, measured, not imposed, already latent in ordinary phonetic
+// input.
+export function formFunctionsOf(motifs) {
+  const W = motifs.length;
+  const labels = [];
+  for (let i = 0; i < W; i++) {
+    if (i === 0) {
+      labels.push("STATEMENT");
+      continue;
+    }
+    const isLastWord = i === W - 1;
+    // "Returned home" requires having LEFT home first -- checked only for
+    // i > 1, since word 1 relating exactly back to word 0 is just what an
+    // immediate RESTATEMENT looks like (real cadences travel away and
+    // resolve back; they aren't the very next chord). Without this guard,
+    // a tightly motivic phrase where every word relates exactly to its
+    // neighbor (PIK TAK SHOK KOT's own PIK->TAK) would misfire CADENCE one
+    // word early -- caught directly against this project's own worked
+    // example, which the design doc claims should read RESTATEMENT here.
+    const home = i > 1 ? relate(motifs[i].pcSet, motifs[0].pcSet, {
+      orderedA: motifs[i].spokes,
+      orderedB: motifs[0].spokes,
+    }) : null;
+    const hasReturnedHome = !!home && home.residual === 0;
+    if (isLastWord || hasReturnedHome) {
+      labels.push("CADENCE");
+      continue;
+    }
+    const r = relate(motifs[i - 1].pcSet, motifs[i].pcSet, {
+      orderedA: motifs[i - 1].spokes,
+      orderedB: motifs[i].spokes,
+    });
+    const residual = r ? r.residual : 1; // no relation possible (mismatched degenerate input) -- treat as maximal contrast, never crash
+    const theta = 1 / Math.max(1, motifs[i].cardinality);
+    if (residual === 0) labels.push("RESTATEMENT");
+    else if (residual <= theta) labels.push("DEVELOPMENT");
+    else labels.push("CONTRAST");
+  }
+  return labels;
+}
+
+export function describeForm(motifs) {
+  return motifs.length ? formFunctionsOf(motifs).join(" > ") : "";
 }

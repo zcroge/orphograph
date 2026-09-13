@@ -12,8 +12,8 @@ import { PictographKeyboard } from "./keyboard.js";
 import { CompactLegend } from "./compactLegend.js";
 import { pixelGlyphSVGMarkup } from "./glyphRender.js";
 import { patternsForRing, patternsForMotif, velocityForStep, GHOST_VELOCITY } from "./rhythm.js";
-import { deriveArc, arcIntensityAt, stageForIntensity, subdivisionForStage, tierEmphasisForStage, describeArc, ARC_STAGES, ARC_STAGE_COUNT } from "./arc.js";
-import { deriveMotifs } from "./motif.js";
+import { deriveArc, arcIntensityAt, stageForIntensity, subdivisionForStage, tierEmphasisForStage, describeArc, ARC_STAGES, ARC_STAGE_COUNT, subsetsForTraversal, vocabularyOf, depthAt, describeTraversal, describeForm } from "./arc.js";
+import { deriveMotifs, applyMotifOp } from "./motif.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -396,6 +396,20 @@ let wordOfEntry = new Map();
 let currentMotifs = [];
 let motifOfEntry = new Map();
 const currentMotifByRing = { given: null, received: null, made: null };
+// Form traversal (src/arc.js) -- yati (already computed for currentArc)
+// selects one of six named traversal strategies over the phrase's own
+// words; `currentVocabulary` is the phrase's own measured, deduplicated
+// D12 relation set (arc.js's vocabularyOf), built once per Play alongside
+// currentMotifs. `traversalCount` is the one genuinely new persistent
+// counter this phase adds: a 0-indexed lap count, incremented on every
+// real given-ring onTraceLoop (the SAME event that already advances the
+// transposition series) and reset to 0 whenever checkSeriesClosed
+// actually closes a series -- kept in lockstep with that clock rather
+// than a second, independently-timed one, for the same reason
+// arcIntensityAt's own period reuses the transposition series instead of
+// inventing a new clock.
+let currentVocabulary = [];
+let traversalCount = 0;
 // Per ring: the last word (object identity into currentWords) this ring's
 // own flute retune already fired for -- melody mode's onNoteHit fires
 // once per AUDIBLE letter, but the flute should only retune once per real
@@ -628,6 +642,13 @@ function checkSeriesClosed() {
   view.resetCycleReadoutSeries();
   seriesStartPulse += seriesTotalMasterPulses; // advance by the exact interval just closed, not "now" -- keeps long sessions from drifting
   recomputeSeriesTotalPulses(); // the trace/step-size may have changed since this series began
+  // The form's own traversal counter resets alongside the series it's
+  // synced to -- see currentTraversalState's own comment. Without this,
+  // traversalCount would keep climbing past the series' own real period
+  // (transpositionCycleSteps laps), and depthAt's clamp to maxDepth would
+  // just hold the form at its final, fully-developed state forever
+  // instead of the form genuinely restarting with the new series.
+  traversalCount = 0;
   // A real breakdown -- "djent breakdowns are a real STRUCTURAL moment,"
   // tied to an event this engine already tracks discretely, not another
   // continuous intensity increment. The series closing IS that moment;
@@ -699,6 +720,39 @@ function updateIsorhythmReadout() {
   const p = patternsForMotif(motif, "given", currentSubdivision());
   const phasing = p.disorientationDepth === 1 ? "maximal phasing" : p.disorientationDepth === SPOKE_COUNT ? "never phases (talea locked to the bar)" : `disorientation depth ${p.disorientationDepth}`;
   el.textContent = `talea ${p.talea} pulses · realigns every ${p.realignmentBars} bar${p.realignmentBars === 1 ? "" : "s"} · ${phasing}`;
+}
+
+// The form traversal's own live state -- a pure function of already-live
+// values (currentArc.W/.yati, currentVocabulary, traversalCount), so
+// "read live state, don't cache" applies here exactly as everywhere else
+// in this file: nothing is stored beyond the raw traversalCount, and
+// every reader (the guitar riff, the flute, the readout) calls this
+// fresh. `chain` is what actually gets applied to a motif's own spokes at
+// RENDER TIME (see applyMotifOp, src/motif.js) -- never by rebuilding the
+// trace, which would restart the sequencer and lose every ring's phase.
+function currentTraversalState() {
+  const W = currentArc.W;
+  const subsets = subsetsForTraversal(currentArc.yati, W);
+  const S = Math.max(1, subsets.length);
+  const subsetIndex = traversalCount % S;
+  const maxDepth = currentVocabulary.length;
+  const depth = depthAt(traversalCount, S, maxDepth);
+  return {
+    subsets, S, subsetIndex, depth,
+    activeWordIndices: subsets[subsetIndex] || [],
+    chain: currentVocabulary.slice(0, depth),
+  };
+}
+
+// Applies the form's own current development chain to a motif's ordered
+// spokes -- the ONE place every color-reading voice (guitar riff pitch,
+// flute word-voicing) goes through, so "one motif, many readers" holds:
+// neither voice invents its own transform, both read the SAME derived
+// chain. Returns `spokes` unchanged (a NEW array, never mutated in
+// place) when there is nothing to develop yet (depth 0, or no motif).
+function developedSpokes(spokes) {
+  const { chain } = currentTraversalState();
+  return chain.reduce((t, step) => applyMotifOp(t, step), spokes.slice());
 }
 
 // Which ring's own Euclidean pattern the guitar chugs on -- "kick-and-chug
@@ -896,6 +950,13 @@ const sequencer = new Sequencer({
       // becomes its own breakdown -- back to back breakdowns are a real
       // possibility, not a bug, for a long enough top-stage performance.
       breakdownActive = false;
+      // The form's own traversal counter -- one given-ring lap IS one
+      // traversal pass (see currentTraversalState's own comment for why
+      // this stays synced with the transposition series instead of a
+      // second, independently-timed clock). Advances unconditionally,
+      // the same way the dial-stepping below does, regardless of whether
+      // transposition itself is enabled.
+      traversalCount += 1;
       // "The rotating rim should... only advance/rotate to its new
       // transpose state/offset on the transpose or given step" -- one full
       // pass of the given ring IS that step. Steps by the real
@@ -1065,9 +1126,19 @@ const sequencer = new Sequencer({
               // "repeated against a stable grid" character a riff needs.
               let spokeToPlay = currentMotif ? currentMotif.root : currentRootSpoke;
               if (guitarBehavior === "riff" && tier === "accent" && currentMotif && currentMotif.spokes.length) {
+                // The form's own developing variation (src/arc.js's
+                // traversal/vocabulary) reaches the riff here -- the SAME
+                // motif, read through whatever D12 chain the current
+                // traversal pass has accumulated (see
+                // currentTraversalState/developedSpokes). At depth 0
+                // (the phrase's own opening statement) this is a no-op --
+                // chain.reduce over an empty array returns the motif's
+                // own spokes unchanged, so a fresh phrase always states
+                // its riff PLAINLY before anything develops it.
+                const rendered = developedSpokes(currentMotif.spokes);
                 const accentEvery = PULSES_PER_BEAT * pattern.s * (stageDef.halfTime ? 2 : 1);
                 const accentIndex = Math.floor(step / accentEvery);
-                spokeToPlay = currentMotif.spokes[accentIndex % currentMotif.spokes.length];
+                spokeToPlay = rendered[accentIndex % rendered.length];
               }
               const chugSec = (pulseSec / pattern.s) * audio.guitarParams.guitarChugTightness;
               audio.playGuitarChug(ring, hzForSpoke(transposedSpoke(spokeToPlay)), {
@@ -1212,7 +1283,15 @@ const sequencer = new Sequencer({
       const word = wordOfEntry.get(target);
       if (word && lastFluteWordByRing[ring] !== word) {
         lastFluteWordByRing[ring] = word;
-        const wordSpokes = word.map((e) => transposedSpoke(e.spoke));
+        // The form's own developing variation reaches the flute here too
+        // -- the SAME chain the guitar riff reads (currentTraversalState
+        // is one shared, live-read source; neither voice invents its
+        // own transform). `motifOfEntry` finally gets its first real
+        // reader: built in Phase 2 alongside wordOfEntry, unused until
+        // now.
+        const wordMotif = motifOfEntry.get(target);
+        const rawSpokes = wordMotif ? developedSpokes(wordMotif.spokes) : word.map((e) => e.spoke);
+        const wordSpokes = rawSpokes.map(transposedSpoke);
         audio.meanderFlute(ring, wordSpokes, wordSpokes[0]);
       }
     } else if (!target.isRest && velocity === 0 && $("ghost-taps").checked) {
@@ -1565,7 +1644,7 @@ function applyArcStage(stage) {
 
 function updateArcReadout(I) {
   const el = $("arc-readout");
-  if (el) el.textContent = describeArc(currentArc, I);
+  if (el) el.textContent = `${describeArc(currentArc, I)} · ${describeTraversal(currentTraversalState())} · form ${describeForm(currentMotifs)}`;
 }
 
 function render() {
@@ -1797,6 +1876,13 @@ $("play").addEventListener("click", () => {
     for (let wi = 0; wi < currentWords.length; wi++) for (const e of currentWords[wi]) motifOfEntry.set(e, currentMotifs[wi]);
     currentMotifByRing.given = currentMotifByRing.received = currentMotifByRing.made = null;
     updateIsorhythmReadout();
+    // The form's own vocabulary and traversal count -- a fresh phrase
+    // means a fresh set of word-to-word relations to develop with, and a
+    // fresh form starts stating its own material plainly (traversal 0,
+    // depth 0) rather than continuing wherever the last phrase's own form
+    // happened to leave off.
+    currentVocabulary = vocabularyOf(currentMotifs);
+    traversalCount = 0;
     lastFluteWordByRing.given = lastFluteWordByRing.received = lastFluteWordByRing.made = null;
     hullCursor.given = hullCursor.received = hullCursor.made = null;
     // The marquee's own "one revolution" clock -- a fresh phrase means a
