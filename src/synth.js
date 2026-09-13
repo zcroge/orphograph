@@ -210,10 +210,65 @@ export const DEFAULT_MIX_PARAMS = {
   mixNote: 1,
   mixFlute: 1.45,
   mixPercussion: 1,
+  mixGuitar: 1,
   mixMaster: 0.45,
   mixFluteLowMidHz: 400,
   mixFluteLowMidDb: 5,
   mixLevelerAmount: 0.35,
+};
+
+// The rhythmic, palm-muted, overdriven, drop-tuned guitar/bass voice.
+// Synthesized, not sampled -- the flute's own reasoning (a near-pure
+// spectrum exposes synthesis artifacts instantly, "nobody ships a
+// convincing flute from oscillators plus noise") inverts for a high-gain
+// guitar: a tanh clipper at real drive erases most of the difference
+// between a real string and a sawtooth, the same reason a cheap and an
+// expensive guitar sound closer once heavily distorted. Sawtooth is a
+// deliberate, LABELED exception to this file's own earlier "sawtooth
+// removed as harsh" decision (see playNote's own detuneCents comment) --
+// that reasoning was about an undistorted, vocal-adjacent, struck voice;
+// sawtooth-into-distortion is the canonical source waveform for exactly
+// this genre instead. One voice, not two ("guitar/bass") -- guitarSubAmount
+// is the "bass" half, a sub-octave doubling layer, not a second instrument
+// (the drone still permanently holds the true sub-bass, by law).
+//
+// Register (guitarFloorHz/CeilingHz): derived BY HAND from this project's
+// own DRONE_HZ (main.js: hzForSpoke(7) * 2^DRONE_OCTAVE_SHIFT = 311.13 /
+// 8 = 38.89Hz) -- floorHz = DRONE_HZ*2 (~77.8Hz), ceilingHz = floorHz*4
+// (two octaves). Real metal-mix practice high-passes rhythm guitars at
+// 80-120Hz precisely because that low end belongs to the kick/bass --
+// this HPF corner sits right at that floor, so drop-tuning is expressed
+// as register + slack attack + drive, not as a literal sub-80Hz
+// fundamental (which would fight the drone/kick directly). Not computed
+// live from DRONE_HZ (synth.js has no reach into main.js's own constant,
+// and DEFAULT_*_PARAMS objects elsewhere in this file are already baked
+// numbers, not live formulas -- see DEFAULT_NOTE_PARAMS' own floorHz/
+// ceilingHz) -- if the placeholder tuning (letters.js) is ever resettled,
+// this needs re-deriving by hand too, same as every other register here.
+//
+// guitarScoopHz defaults to droneGrowlF2Hz's OWN current value (580) --
+// the guitar vacates exactly the band the drone's throat voice occupies,
+// which also happens to be the classic metal mid-scoop frequency; the
+// measurement and the genre convention agree.
+export const DEFAULT_GUITAR_PARAMS = {
+  guitarPreGain: 1,
+  guitarDriveAmount: 0.6,
+  guitarFloorHz: 77.8,
+  guitarCeilingHz: 311.1,
+  guitarScoopHz: 580,
+  guitarScoopQ: 1.2,
+  guitarScoopDb: -6,
+  guitarCabLowpassHz: 4800,
+  guitarSubAmount: 0.35,
+  guitarDetuneCents: 6,
+  // Multiplies the derived per-step chug length (main.js computes the
+  // real seconds from the live pulse rate/subdivision, never a fixed ms,
+  // and passes it in) -- 1.0 is a TRUE no-op identity, same "off means
+  // off" discipline buildSaturationCurve's own amount=0 already follows.
+  guitarChugTightness: 1,
+  guitarChugAttackFraction: 0.06,
+  guitarDuckAmount: 0.3,
+  guitarDuckPulseFraction: 0.25,
 };
 
 // Defaults exported so a "factory default" preset can always be reconstructed
@@ -956,6 +1011,31 @@ function applyChamberModeParams(bank, dp, chamberFundamentalHz, now, glideTc) {
   }
 }
 
+// The guitar cabinet's own fixed body resonance -- a small, FIXED bank
+// (not retuned per note), the same "a real body's resonances are fixed by
+// its physical geometry, they don't move when fingering changes" reasoning
+// buildFluteChamberBank's own header comment already established for the
+// flute. A real cabinet's own resonance behavior is dominated by a couple
+// of real cone/box modes (a low body thump, a presence peak), not a clean
+// harmonic-series ladder like a wind-instrument pipe -- so this is two
+// named peaks, not a mode-count/pipe-type table like the flute's own bank.
+function buildGuitarCabBank(ctx) {
+  const input = ctx.createGain();
+  const low = ctx.createBiquadFilter();
+  low.type = "peaking";
+  low.frequency.value = 110;
+  low.Q.value = 1.1;
+  low.gain.value = 4;
+  const presence = ctx.createBiquadFilter();
+  presence.type = "peaking";
+  presence.frequency.value = 2200;
+  presence.Q.value = 1.3;
+  presence.gain.value = 3;
+  input.connect(low);
+  low.connect(presence);
+  return { input, output: presence };
+}
+
 function buildSyntheticImpulseResponse(ctx, seconds = 3.2, decay = 3.5) {
   const length = Math.floor(ctx.sampleRate * seconds);
   const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
@@ -1089,6 +1169,11 @@ export class OrphographAudio {
     // edit (see main.js's PERCUSSION_KIT_PRESETS), not a code change.
     this.percussionParams = { ...DEFAULT_PERCUSSION_PARAMS };
 
+    // Guitar/bass-timbre parameters -- same live-adjustable, read-write
+    // pattern as noteParams/percussionParams. See DEFAULT_GUITAR_PARAMS'
+    // own comment for the instrument itself.
+    this.guitarParams = { ...DEFAULT_GUITAR_PARAMS };
+
     // Mixer parameters -- see DEFAULT_MIX_PARAMS. Same live-tunable,
     // read-write pattern as noteParams/percussionParams; pushed onto the
     // real channel gain nodes by setMixParam once ensureContext has built
@@ -1185,6 +1270,33 @@ export class OrphographAudio {
     if (this.percussionParams && key in this.percussionParams) this.percussionParams[key] = value;
   }
 
+  // The guitar/bass rig's own params -- unlike percussion (a one-shot
+  // voice that reads percussionParams fresh every hit, nothing persistent
+  // to push into), the guitar's DRIVE/TONE STACK is a real persistent
+  // graph (see _ensureGuitarRig), so most of these need live pushes here,
+  // the same "dict write, then push onto the live nodes if they already
+  // exist" pattern setMixParam/setDroneParam already use. Params read
+  // fresh per chug instead (guitarCeilingHz/SubAmount/DetuneCents/
+  // ChugTightness/ChugAttackFraction/DuckAmount/DuckPulseFraction -- see
+  // playGuitarChug/_duckGuitar) need no case here at all.
+  setGuitarParam(key, value) {
+    if (!(this.guitarParams && key in this.guitarParams)) return;
+    this.guitarParams[key] = value;
+    const rig = this._guitarRig;
+    if (!this.ctx || !rig) return;
+    const now = this.ctx.currentTime;
+    const glide = (param, v) => param.setTargetAtTime(v, now, 0.05);
+    switch (key) {
+      case "guitarPreGain": glide(rig.preGain.gain, value); break;
+      case "guitarDriveAmount": rig.saturator.curve = buildSaturationCurve(value); break;
+      case "guitarFloorHz": glide(rig.highpass.frequency, value); break;
+      case "guitarScoopHz": glide(rig.scoop.frequency, value); break;
+      case "guitarScoopQ": glide(rig.scoop.Q, value); break;
+      case "guitarScoopDb": glide(rig.scoop.gain, value); break;
+      case "guitarCabLowpassHz": glide(rig.cabLowpass.frequency, value); break;
+    }
+  }
+
   // The mixer -- see DEFAULT_MIX_PARAMS. Always remembers the value (so
   // wireTimbrePanel's module-load-time apply, before any user gesture/
   // ensureContext, is harmless -- same guard setPercussionLevel always
@@ -1201,6 +1313,7 @@ export class OrphographAudio {
       case "mixNote": glide(this._chanNote.gain, value); break;
       case "mixFlute": glide(this._chanFlute.gain, value); break;
       case "mixPercussion": glide(this._percussionGate.gain, value); break;
+      case "mixGuitar": glide(this._chanGuitar.gain, value); break;
       case "mixMaster": glide(this.master.gain, value); break;
       case "mixFluteLowMidHz": glide(this._fluteLowMid.frequency, value); break;
       case "mixFluteLowMidDb": glide(this._fluteLowMid.gain, value); break;
@@ -1256,6 +1369,7 @@ export class OrphographAudio {
       note: rms(this._meterNote),
       flute: rms(this._meterFlute),
       percussion: rms(this._meterPercussion),
+      guitar: rms(this._meterGuitar),
       master: rms(this._meterMaster),
       clipping,
     };
@@ -2257,6 +2371,18 @@ export class OrphographAudio {
       this._percussionGate.connect(this.dry);
       this._percussionGate.connect(this.reverbSend);
 
+      // The guitar/bass channel -- routes through _nonFluteGate like
+      // chanDrone/chanNote (a real melodic/rhythmic voice competing with
+      // the flute, not a structural layer like percussion, so flute-solo
+      // silences it too). The rig itself (_ensureGuitarRig) is built
+      // lazily, on the first real chug -- not here -- since nothing about
+      // it depends on ensureContext's own one-time setup specifically,
+      // matching the drone/flute's own "build the graph when it's first
+      // actually needed" precedent (setDroneVoices).
+      this._chanGuitar = ctx.createGain();
+      this._chanGuitar.gain.value = this.mixParams.mixGuitar;
+      this._chanGuitar.connect(this._nonFluteGate);
+
       // Metering -- one small analyser per channel plus the master output,
       // read by mixMeterLevels() (polled from main.js's existing tickRate
       // rAF loop, not a new one). Time-domain only -- RMS/clip-peek is all
@@ -2271,6 +2397,7 @@ export class OrphographAudio {
       this._meterNote = tapAnalyser(this._chanNote);
       this._meterFlute = tapAnalyser(this._chanFlute);
       this._meterPercussion = tapAnalyser(this._percussionGate);
+      this._meterGuitar = tapAnalyser(this._chanGuitar);
       this._meterMaster = tapAnalyser(this.master);
 
       // "Real royalty-free flute/drone/woodwind sound plate" -- see
@@ -2728,21 +2855,44 @@ export class OrphographAudio {
   // echo embellishes an already-decided real hit, it isn't a new
   // independent resultant-rhythm event to separately thin), but sets the
   // boost directly instead of accent's fixed 1.6x. Normal calls
-  // (`accent=false, gainMultiplier=null`) are the exact density-gated
-  // path this always had.
-  playPercussionHit(ring, { accent = false, gainMultiplier = null } = {}) {
-    if (!accent && gainMultiplier === null) {
+  // (`accent=false, gainMultiplier=null, velocity=null`) are the exact
+  // density-gated path this always had.
+  // `velocity` -- an AUTHORED onset from the Euclidean pattern engine
+  // (src/rhythm.js, see main.js's onPulse scheduler), not a geometric
+  // resultant-rhythm hit. Same bypass reasoning as gainMultiplier -- a
+  // pattern-decided onset already went through its own real decision
+  // process (a computed rhythm, not a raw hit stream); it is not an
+  // independent event for the density accumulator to ALSO thin ("one
+  // onset, one decider"). Bypasses whenever explicitly passed, even at
+  // exactly 1.0 (the pattern engine's own "normal" velocity tier) -- the
+  // sentinel is "did the caller assert an onset happened," not "is the
+  // boost non-default."
+  // `atTime` -- schedules against a caller-given AudioContext time instead
+  // of always `ctx.currentTime`. Needed for sub-pulse subdivision (the
+  // pattern engine schedules several onsets within one ring pulse ahead
+  // of time) -- `null` (the default) preserves the exact old behavior for
+  // every existing call site.
+  playPercussionHit(ring, { accent = false, gainMultiplier = null, velocity = null, atTime = null } = {}) {
+    if (!accent && gainMultiplier === null && velocity === null) {
       const acc = this._percussionDensityAccumulator;
       acc[ring] += this._percussionDensity;
       if (acc[ring] < 1) return false;
       acc[ring] -= 1;
     }
-    const boost = accent ? 1.6 : (gainMultiplier !== null ? gainMultiplier : 1);
+    const boost = accent ? 1.6 : (gainMultiplier !== null ? gainMultiplier : (velocity !== null ? velocity : 1));
     const ctx = this.ensureContext();
-    const t0 = ctx.currentTime;
+    const t0 = atTime != null ? atTime : ctx.currentTime;
     const pp = this.percussionParams;
 
     if (ring === "given") {
+      // Kick-owned sidechain duck on the guitar -- a real, established
+      // production technique (kick ducking guitars/bass), and the direct
+      // answer to the one remaining register overlap the mid-scoop/
+      // highpass alone don't cover: the kick's own sweep top (150Hz)
+      // against the guitar's fundamental region, under the drone's own
+      // +12dB sub-140Hz lowshelf. No-ops harmlessly if the guitar rig was
+      // never built (most performances never touch it).
+      this._duckGuitar();
       // Kick -- a sine sweeping down fast (150Hz -> 50Hz over ~40ms, the
       // standard "click into thump" drum-synthesis recipe) plus a brief
       // lowpassed noise transient for the beater attack. Raised from 0.9:
@@ -2830,6 +2980,172 @@ export class OrphographAudio {
       noise.stop(t0 + pp.hatDecayMs / 1000 + 0.01);
     }
     return true;
+  }
+
+  // Builds the guitar/bass rig's own persistent graph -- lazily, on the
+  // first real chug, the same "build the graph when it's first actually
+  // needed" precedent setDroneVoices already sets for the drone/flute.
+  // Signal order is deliberate and load-bearing: DRIVE first, then the
+  // tone stack (highpass -> mid-scoop -> cab lowpass -> cab body
+  // resonance) -- both the standard virtual-analog amp topology (preamp
+  // gain -> tone stack -> cabinet) AND this file's own hard-won "car horn"
+  // lesson (the drone's growl saturator sits AFTER its own bandpass,
+  // which concentrated new harmonic content into a narrow band and read
+  // as a car horn rather than a rough growl -- see droneGrowlSaturatorF1's
+  // own comment). That ordering is right THERE (a parallel-send source
+  // selector, not a tone stack); it is the wrong model to copy here.
+  //
+  // Four gain-node stages, four distinct owners -- arcGain (main.js's
+  // intensity arc, guitar enable/disable across stages), duckGain
+  // (_duckGuitar below, exclusively), _chanGuitar (setMixParam,
+  // exclusively) -- the exact "chain of multiplied gain nodes with
+  // strictly separated ownership" fix this file's own toneGain/
+  // toneSurgeGain bug (see meanderFlute) already established, applied
+  // from day one instead of after a bug.
+  _ensureGuitarRig() {
+    if (this._guitarRig) return this._guitarRig;
+    const ctx = this.ensureContext();
+    const gp = this.guitarParams;
+
+    const preGain = ctx.createGain();
+    preGain.gain.value = gp.guitarPreGain;
+    const saturator = ctx.createWaveShaper();
+    saturator.curve = buildSaturationCurve(gp.guitarDriveAmount);
+    saturator.oversample = "4x";
+    const highpass = ctx.createBiquadFilter();
+    highpass.type = "highpass";
+    highpass.frequency.value = gp.guitarFloorHz;
+    const scoop = ctx.createBiquadFilter();
+    scoop.type = "peaking";
+    scoop.frequency.value = gp.guitarScoopHz;
+    scoop.Q.value = gp.guitarScoopQ;
+    scoop.gain.value = gp.guitarScoopDb;
+    const cabLowpass = ctx.createBiquadFilter();
+    cabLowpass.type = "lowpass";
+    cabLowpass.frequency.value = gp.guitarCabLowpassHz;
+    const cabBank = buildGuitarCabBank(ctx);
+    const arcGain = ctx.createGain();
+    arcGain.gain.value = 1;
+    const duckGain = ctx.createGain();
+    duckGain.gain.value = 1;
+
+    preGain.connect(saturator);
+    saturator.connect(highpass);
+    highpass.connect(scoop);
+    scoop.connect(cabLowpass);
+    cabLowpass.connect(cabBank.input);
+    cabBank.output.connect(arcGain);
+    arcGain.connect(duckGain);
+    duckGain.connect(this._chanGuitar);
+
+    this._guitarRig = { input: preGain, preGain, saturator, highpass, scoop, cabLowpass, cabBank, arcGain, duckGain };
+    return this._guitarRig;
+  }
+
+  // The per-event "chug" voice -- built fresh, dies with the note, fired
+  // INTO the persistent rig above (the hybrid shape neither the kalimba
+  // nor the drone/flute individually are -- a persistent amp, cheap
+  // per-event voices). Two detuned sawtooths (the deliberate, labeled
+  // exception -- see DEFAULT_GUITAR_PARAMS' own comment) plus a
+  // sub-octave doubling layer for the "bass" half, all through the SAME
+  // highpass as everything else, so the sub layer's own fundamental is
+  // attenuated there and its 2nd harmonic reinforces the main voice's
+  // fundamental instead of competing as independent sub-bass. `chugSec`/
+  // `attackFraction` are ALWAYS handed in by the caller (main.js), never
+  // recomputed here from pulse rate -- the exact same "main.js computes
+  // timing, synth.js only shapes the envelope" split playNote's own
+  // `duration` parameter already establishes. `letRing` (structural
+  // punctuation -- reversals/convergence/breath) sustains far longer, an
+  // open chord instead of a muted chug.
+  playGuitarChug(ring, hz, { velocity = 1, atTime = null, chugSec = 0.3, attackFraction = 0.06, letRing = false } = {}) {
+    const ctx = this.ensureContext();
+    const rig = this._ensureGuitarRig();
+    const gp = this.guitarParams;
+    const t0 = atTime != null ? atTime : ctx.currentTime;
+    const foldedHz = foldIntoRange(hz, gp.guitarFloorHz, gp.guitarCeilingHz);
+    const sustainSec = letRing ? Math.max(chugSec, 1) : chugSec;
+    const stopAt = t0 + sustainSec + 0.15;
+
+    const pan = { given: -0.5, received: 0, made: 0.5 }[ring] ?? 0;
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = pan;
+    panner.connect(rig.input);
+
+    // The palm-mute envelope -- owned EXCLUSIVELY by this one event, same
+    // "one AudioParam, one owner" discipline as every other per-hit gate
+    // in this file. Fast attack, exponential decay, no sustain -- the
+    // SAME shape playNote's own kalimba envelope already uses, which
+    // already reads as a struck/muted voice, not a swell.
+    const voiceGain = ctx.createGain();
+    const attackSec = Math.max(0.002, sustainSec * attackFraction);
+    voiceGain.gain.setValueAtTime(0.0001, t0);
+    voiceGain.gain.linearRampToValueAtTime(velocity, t0 + attackSec);
+    voiceGain.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+    voiceGain.connect(panner);
+
+    const detune = gp.guitarDetuneCents;
+    for (const cents of [-detune / 2, detune / 2]) {
+      const osc = ctx.createOscillator();
+      osc.type = "sawtooth";
+      osc.frequency.value = foldedHz;
+      osc.detune.value = cents;
+      const oscGain = ctx.createGain();
+      oscGain.gain.value = 0.4;
+      osc.connect(oscGain);
+      oscGain.connect(voiceGain);
+      osc.start(t0);
+      osc.stop(stopAt + 0.05);
+    }
+
+    if (gp.guitarSubAmount > 0) {
+      const sub = ctx.createOscillator();
+      sub.type = "sawtooth";
+      sub.frequency.value = foldedHz / 2;
+      const subGain = ctx.createGain();
+      subGain.gain.value = gp.guitarSubAmount;
+      sub.connect(subGain);
+      subGain.connect(voiceGain);
+      sub.start(t0);
+      sub.stop(stopAt + 0.05);
+    }
+
+    // Pick/mute transient -- the same "broadband filtered-noise attack"
+    // idiom playNote's own pluck transient already uses.
+    const pick = ctx.createBufferSource();
+    pick.buffer = this._noiseBuffer();
+    const pickFilter = ctx.createBiquadFilter();
+    pickFilter.type = "bandpass";
+    pickFilter.frequency.value = foldedHz * 2;
+    pickFilter.Q.value = 1.2;
+    const pickGain = ctx.createGain();
+    pickGain.gain.setValueAtTime(0.5 * velocity, t0);
+    pickGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.02);
+    pick.connect(pickFilter);
+    pickFilter.connect(pickGain);
+    pickGain.connect(voiceGain);
+    pick.start(t0);
+    pick.stop(t0 + 0.03);
+  }
+
+  // The kick-owned sidechain duck -- see playPercussionHit's own given-
+  // ring branch, the only call site. No-ops if the guitar rig doesn't
+  // exist yet (most performances never touch the guitar). `ringSpeedMultiplier`
+  // is already imported here (this file's own header) -- computes the
+  // given ring's real current pulse rate itself rather than reaching into
+  // main.js's own ringPulsesPerSecond, the same self-sufficiency every
+  // other per-ring timing figure in this file already has.
+  _duckGuitar() {
+    const rig = this._guitarRig;
+    if (!rig || !this.ctx) return;
+    const gp = this.guitarParams;
+    const t0 = this.ctx.currentTime;
+    const givenPulseSec = 1 / (this._masterPulsesPerSecond * ringSpeedMultiplier("given"));
+    const duckSec = givenPulseSec * gp.guitarDuckPulseFraction;
+    const g = rig.duckGain.gain;
+    g.cancelScheduledValues(t0);
+    g.setValueAtTime(g.value, t0); // hold current position first -- avoids a jump if a prior duck hasn't fully released yet
+    g.linearRampToValueAtTime(1 - gp.guitarDuckAmount, t0 + duckSec * 0.15);
+    g.setTargetAtTime(1, t0 + duckSec * 0.15, duckSec * 0.4);
   }
 
   // Breath-cycle percussion accent -- "the pattern's own periodic

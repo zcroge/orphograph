@@ -24,11 +24,77 @@
 //                     "I-N-G-O-T"
 
 import { spokeForLetter, canonicalToken, PLACEHOLDER_SPOKE_OF, SHORTHAND_OF, REST } from "./letters.js";
+import { SPOKE_COUNT } from "./wheel.js";
 
 const MAX_TOKEN_LEN = Math.max(
   ...Object.keys(PLACEHOLDER_SPOKE_OF).map((t) => t.length),
   ...Object.keys(SHORTHAND_OF).map((t) => t.length)
 );
+
+// Word-level structure -- split out of deriveTrace below, shared by
+// sequencer.js (RingRunner's own chord/melody timing) and main.js (the
+// tracer, the transposition-series clock, and the rhythm/arc systems).
+// These five used to be hand-duplicated in both of those files (each with
+// its own "kept in sync by hand" comment) since deriveTrace computed word
+// structure internally and threw it away, returning only a flat trace --
+// this is that structure's one real home now, and deriveTrace itself
+// returns `words` alongside `trace` below so nothing has to re-derive it
+// a third time.
+
+// "duration = arc" -- one of the nine sonic parameters declared from the
+// start, never actually implemented until now (chord/note durations were
+// fixed constants everywhere). A word's arc is the sum of the SHORTER arc
+// (same rule as "direction = shorter arc") between each consecutive pair
+// of its letters' spokes -- a tightly-clustered word gets a small arc and
+// a quick chord; a word whose letters range widely across the wheel gets
+// a proportionally larger one. Derived from the word's own geometry, not
+// a flat constant applied to every word regardless of content.
+export const MIN_CHORD_PULSES = 4; // floor, so a 1-letter (zero-arc) word isn't instant
+
+export function wordArc(word) {
+  let total = 0;
+  for (let i = 0; i < word.length - 1; i++) {
+    const d = Math.abs(word[i].spoke - word[i + 1].spoke) % SPOKE_COUNT;
+    total += Math.min(d, SPOKE_COUNT - d);
+  }
+  return total;
+}
+
+export function chordPulseLength(word) {
+  return Math.max(MIN_CHORD_PULSES, wordArc(word));
+}
+
+// "Direction = shorter arc (tie -> word's handedness)" -- one of the nine
+// sonic parameters declared from the very start, alongside "duration =
+// arc," but never implemented until now: the ring always swept clockwise
+// regardless of which way was actually closer to its next target. A
+// word's own handedness (used only to break an exact tie, i.e. the target
+// is precisely antipodal, 6 spokes either way) is derived from the word's
+// own shape -- which way its overall span from first letter to last
+// letter leans -- not assigned arbitrarily.
+export function wordHandedness(word) {
+  if (word.length < 2) return 1;
+  const first = word[0].spoke;
+  const last = word[word.length - 1].spoke;
+  const cw = (last - first + SPOKE_COUNT) % SPOKE_COUNT;
+  const ccw = SPOKE_COUNT - cw;
+  return cw <= ccw ? 1 : -1;
+}
+
+export function splitIntoWords(trace) {
+  const words = [];
+  let current = [];
+  for (const entry of trace) {
+    if (entry.isRest) {
+      if (current.length) words.push(current);
+      current = [];
+    } else {
+      current.push(entry);
+    }
+  }
+  if (current.length) words.push(current);
+  return words;
+}
 
 // Unrecognized input is flagged, not fatal -- "make sure our system can
 // handle any input, and flag/discard any unrecognized input." One bad
@@ -111,7 +177,14 @@ export function deriveTrace(inputText) {
   // (Distinct from the drone, which always anchors on I -- see main.js.)
   const rootEntry = trace.find((t) => !t.isRest) ?? trace[0];
 
-  return { tokens: trace.map((t) => t.letter), trace, rootSpoke: rootEntry.spoke, unknownTokens };
+  // Word structure -- real, already-computed data (this function already
+  // walked the rest boundaries once, above) that used to be discarded
+  // here and separately re-derived by hand downstream (see splitIntoWords's
+  // own comment). This is the CALL trace's own word list; a woven
+  // (Response-operator) trace has its own, different word count and is
+  // split again by the caller once weaving is known -- see main.js's Play
+  // handler.
+  return { tokens: trace.map((t) => t.letter), trace, words: splitIntoWords(trace), rootSpoke: rootEntry.spoke, unknownTokens };
 }
 
 // Live typing feedback -- which RAW CHARACTER RANGES in the input text

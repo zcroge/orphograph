@@ -32,6 +32,11 @@
 // before -- see wheel.js's header for the parts derived from source law.
 
 import { SPOKE_COUNT, normalizeSpoke, ringSpeedMultiplier, GROUNDING_BPM, BREATH_CYCLE_PULSES, bpmToMasterPulsesPerSecond } from "./wheel.js";
+// wordArc/chordPulseLength/wordHandedness/splitIntoWords used to be
+// hand-duplicated here (each with its own "kept in sync by hand" comment)
+// since deriveTrace threw its own internal word structure away -- see
+// trace.js's own comment on these. One shared home now.
+import { chordPulseLength, wordHandedness, splitIntoWords, MIN_CHORD_PULSES } from "./trace.js";
 
 export const Phase = Object.freeze({
   IDLE: "idle",
@@ -40,61 +45,6 @@ export const Phase = Object.freeze({
 });
 
 const RING_NAMES = ["given", "received", "made"];
-
-// "duration = arc" -- one of the nine sonic parameters declared from the
-// start, never actually implemented until now (chord/note durations were
-// fixed constants everywhere). A word's arc is the sum of the SHORTER arc
-// (same rule as "direction = shorter arc") between each consecutive pair
-// of its letters' spokes -- a tightly-clustered word gets a small arc and
-// a quick chord; a word whose letters range widely across the wheel gets
-// a proportionally larger one. Derived from the word's own geometry, not
-// a flat constant applied to every word regardless of content.
-const MIN_CHORD_PULSES = 4; // floor, so a 1-letter (zero-arc) word isn't instant
-
-function wordArc(word) {
-  let total = 0;
-  for (let i = 0; i < word.length - 1; i++) {
-    const d = Math.abs(word[i].spoke - word[i + 1].spoke) % SPOKE_COUNT;
-    total += Math.min(d, SPOKE_COUNT - d);
-  }
-  return total;
-}
-
-function chordPulseLength(word) {
-  return Math.max(MIN_CHORD_PULSES, wordArc(word));
-}
-
-// "Direction = shorter arc (tie -> word's handedness)" -- one of the nine
-// sonic parameters declared from the very start, alongside "duration =
-// arc," but never implemented until now: the ring always swept clockwise
-// regardless of which way was actually closer to its next target. A
-// word's own handedness (used only to break an exact tie, i.e. the target
-// is precisely antipodal, 6 spokes either way) is derived from the word's
-// own shape -- which way its overall span from first letter to last
-// letter leans -- not assigned arbitrarily.
-function wordHandedness(word) {
-  if (word.length < 2) return 1;
-  const first = word[0].spoke;
-  const last = word[word.length - 1].spoke;
-  const cw = (last - first + SPOKE_COUNT) % SPOKE_COUNT;
-  const ccw = SPOKE_COUNT - cw;
-  return cw <= ccw ? 1 : -1;
-}
-
-function splitIntoWords(trace) {
-  const words = [];
-  let current = [];
-  for (const entry of trace) {
-    if (entry.isRest) {
-      if (current.length) words.push(current);
-      current = [];
-    } else {
-      current.push(entry);
-    }
-  }
-  if (current.length) words.push(current);
-  return words;
-}
 
 class RingRunner {
   constructor(ringName, { onPulse, onNoteHit, onChordHit, onPhaseChange, onOrigin, onTraceLoop, onDirectionReversal }) {

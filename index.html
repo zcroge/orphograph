@@ -108,6 +108,18 @@
         <input id="tier-emphasis" type="range" min="0" max="1" step="0.01" value="1" />
       </label>
 
+      <div class="row advanced-only" title="The intensity arc -- word count sets a ceiling (a single word is the monastic pole by construction), the word-length sequence (a real Carnatic yati shape -- sama/srotovaha/gopuccha/mridanga/damaru/vishama) sets where within that ceiling the arc sits as the phrase's own transposition series progresses, and it resolves and restarts every series, the same way every other cyclical structure in this engine does. Drives percussion pattern mode, per-ring performance mode, tier emphasis, and the Euclidean pattern engine's own subdivision -- one stage of four, monastic/processional/driving/djent.">
+        <label class="inline"><input id="arc-follows-input" type="checkbox" checked /> arc follows input</label>
+        <label class="inline">intensity <input id="arc-intensity" type="range" min="0" max="1" step="0.01" value="0" /></label>
+        <label class="inline">stage
+          <select id="arc-stage-select"><option value="0">monastic</option><option value="1">processional</option><option value="2">driving</option><option value="3">djent</option></select>
+        </label>
+        <label class="inline" title="Overrides only the arc's own SHAPE (where within its ceiling it sits over time) with a synthetic version of the named yati -- the ceiling and the period (the real transposition-series clock) stay derived either way.">shape
+          <select id="arc-shape-override"><option value="">(derived)</option><option value="sama">sama (constant)</option><option value="srotovaha">srotovaha (expanding)</option><option value="gopuccha">gopuccha (contracting)</option><option value="mridanga">mridanga (expand then contract)</option><option value="damaru">damaru (contract then expand)</option><option value="vishama">vishama (irregular)</option></select>
+        </label>
+        <span id="arc-readout" class="status"></span>
+      </div>
+
       <label class="advanced-only" title="A universal grounding tempo, fixed rather than adjustable -- 72 BPM is the classic textbook average resting heart rate, the same steady, unwavering pulse Gojira ('The Art of Dying') and Meshuggah ('Clockworks') both run beneath otherwise complex/polymetric material. The 6:8:12 rings' own speeds derive from this one anchor; it no longer moves.">
         ground tempo (fixed -- a resting heart-rate anchor) -- <span id="bpm-readout">0 BPM</span>
       </label>
@@ -116,8 +128,14 @@
         <label class="inline">kit
           <select id="percussion-kit-preset"><option value="">(custom)</option><option value="acoustic" selected>Acoustic</option><option value="electronic">Electronic</option><option value="frameDrum">Frame drum</option><option value="industrial">Industrial</option></select>
         </label>
-        <label class="inline" title="Resultant (default): one event per real geometric hit, ebbing and flowing with the density arc -- unchanged. Sparse: only THIS ring's own tier-owned hits sound (skip passed ones) -- quieter, cleaner, for contemplative use. Roll: a hit that actually sounds adds a quick flam of quieter echo-hits, timed to this ring's own current pulse -- denser, for an intense groovy jam.">pattern
-          <select id="percussion-pattern-mode"><option value="resultant" selected>resultant</option><option value="sparse">sparse</option><option value="roll">roll</option></select>
+        <label class="inline" title="Resultant (default): one event per real geometric hit, ebbing and flowing with the density arc -- unchanged. Sparse: only THIS ring's own tier-owned hits sound (skip passed ones) -- quieter, cleaner, for contemplative use. Roll: a hit that actually sounds adds a quick flam of quieter echo-hits, timed to this ring's own current pulse -- denser, for an intense groovy jam. Euclid: a real authored timeline instead (Bjorklund's algorithm, onset count = this ring's own tier-letter census) -- the geometric hits go silent, only the pattern plays. Woven: the same authored timeline plus the geometric resultant hits together -- a fixed timeline with responsive drums answering it, the West/Central African ensemble shape this engine has only ever had half of.">pattern
+          <select id="percussion-pattern-mode"><option value="resultant" selected>resultant</option><option value="sparse">sparse</option><option value="roll">roll</option><option value="euclid">euclid</option><option value="woven">woven</option></select>
+        </label>
+        <label class="inline" title="The palm-muted, overdriven guitar/bass voice's own named character starting points -- see the full guitar timbre panel below for every individual slider. Its own level lives in the mixer panel further down (mixGuitar).">guitar kit
+          <select id="guitar-kit-preset"><option value="">(custom)</option><option value="chug" selected>Chug</option><option value="doom">Doom</option><option value="fuzz">Fuzz</option></select>
+        </label>
+        <label class="inline" title="Which ring's own Euclidean pattern the guitar chugs on -- 'kick-and-chug locked together is genre-defining,' so this defaults to given (the kick's own ring).">guitar follows
+          <select id="guitar-follows-ring"><option value="given" selected>given</option><option value="received">received</option><option value="made">made</option></select>
         </label>
       </div>
 
@@ -288,6 +306,41 @@
         </div>
       </details>
 
+      <details class="timbre-panel advanced-only">
+        <summary>guitar/bass timbre (rhythmic, palm-muted, overdriven, drop-tuned) -- one voice, synthesized (sawtooth into a soft-clip drive), not sampled</summary>
+        <div class="row timbre-presets">
+          <select id="guitar-preset-select"><option value="">(unsaved)</option></select>
+          <button id="guitar-preset-save">save as...</button>
+          <button id="guitar-preset-delete">delete</button>
+          <button id="guitar-preset-reset">factory default</button>
+        </div>
+        <div class="timbre-grid">
+          <div class="timbre-group-label">drive (before the tone stack -- the standard amp order)</div>
+          <label title="Input trim into the drive stage -- pushes harder into the waveshaper without changing the waveshaper's own curve.">pre-gain<span class="rw"><input type="range" id="gp-guitarPreGain" min="0" max="2" value="1" step="0.01" /><input type="number" id="gp-guitarPreGain-n" min="0" max="2" value="1" step="0.01" /></span></label>
+          <label title="Soft-clip (tanh) waveshaper amount -- the same buildSaturationCurve the drone's own growl already uses. 0 = a true identity curve (bypass).">drive amount<span class="rw"><input type="range" id="gp-guitarDriveAmount" min="0" max="1" value="0.6" step="0.01" /><input type="number" id="gp-guitarDriveAmount-n" min="0" max="1" value="0.6" step="0.01" /></span></label>
+
+          <div class="timbre-group-label">register &amp; tone stack (highpass -&gt; mid-scoop -&gt; cab lowpass)</div>
+          <label title="High-pass corner -- also this voice's own register floor (foldIntoRange). Derived by hand from the drone's own fundamental (DRONE_HZ x2) -- real metal-mix practice high-passes rhythm guitars right around here, since that low end belongs to the kick/bass.">register floor (Hz)<span class="rw"><input type="range" id="gp-guitarFloorHz" min="20" max="300" value="77.8" step="0.1" /><input type="number" id="gp-guitarFloorHz-n" min="20" max="300" value="77.8" step="0.1" /></span></label>
+          <label title="This voice's own register ceiling (foldIntoRange) -- two octaves above the floor.">register ceiling (Hz)<span class="rw"><input type="range" id="gp-guitarCeilingHz" min="100" max="1200" value="311.1" step="0.1" /><input type="number" id="gp-guitarCeilingHz-n" min="100" max="1200" value="311.1" step="0.1" /></span></label>
+          <label title="Mid-scoop center -- defaults to the drone's own droneGrowlF2Hz (580Hz), so the guitar vacates exactly the band the drone's throat voice occupies. Also the classic metal mid-scoop frequency -- the measurement and the genre convention agree.">mid-scoop (Hz)<span class="rw"><input type="range" id="gp-guitarScoopHz" min="100" max="2000" value="580" step="1" /><input type="number" id="gp-guitarScoopHz-n" min="100" max="2000" value="580" step="1" /></span></label>
+          <label>mid-scoop width (Q)<span class="rw"><input type="range" id="gp-guitarScoopQ" min="0.1" max="5" value="1.2" step="0.01" /><input type="number" id="gp-guitarScoopQ-n" min="0.1" max="5" value="1.2" step="0.01" /></span></label>
+          <label>mid-scoop depth (dB)<span class="rw"><input type="range" id="gp-guitarScoopDb" min="-18" max="6" value="-6" step="0.5" /><input type="number" id="gp-guitarScoopDb-n" min="-18" max="6" value="-6" step="0.5" /></span></label>
+          <label title="Keeps the guitar's own clipping-generated harmonics out of the snare/hat's own air band.">cab lowpass (Hz)<span class="rw"><input type="range" id="gp-guitarCabLowpassHz" min="1000" max="8000" value="4800" step="50" /><input type="number" id="gp-guitarCabLowpassHz-n" min="1000" max="8000" value="4800" step="50" /></span></label>
+
+          <div class="timbre-group-label">voice (one instrument, not two -- "guitar/bass")</div>
+          <label title="A sub-octave doubling layer -- the 'bass' half of guitar/bass, not a second instrument. Passed through the SAME highpass as everything else, so it reinforces the main voice's fundamental rather than competing as independent sub-bass (the drone still holds the true sub, by law).">sub-octave amount<span class="rw"><input type="range" id="gp-guitarSubAmount" min="0" max="1" value="0.35" step="0.01" /><input type="number" id="gp-guitarSubAmount-n" min="0" max="1" value="0.35" step="0.01" /></span></label>
+          <label title="Unison detune spread between the two main sawtooth oscillators, in cents.">unison detune (cents)<span class="rw"><input type="range" id="gp-guitarDetuneCents" min="0" max="30" value="6" step="1" /><input type="number" id="gp-guitarDetuneCents-n" min="0" max="30" value="6" step="1" /></span></label>
+
+          <div class="timbre-group-label">palm mute (chug length is always derived from the live pulse rate/subdivision -- these only scale it)</div>
+          <label title="Multiplies the derived per-step chug length. 1.0 is a true no-op identity -- the chug occupies exactly one grid step.">chug tightness<span class="rw"><input type="range" id="gp-guitarChugTightness" min="0.3" max="3" value="1" step="0.01" /><input type="number" id="gp-guitarChugTightness-n" min="0.3" max="3" value="1" step="0.01" /></span></label>
+          <label>chug attack (fraction of chug length)<span class="rw"><input type="range" id="gp-guitarChugAttackFraction" min="0.01" max="0.5" value="0.06" step="0.01" /><input type="number" id="gp-guitarChugAttackFraction-n" min="0.01" max="0.5" value="0.06" step="0.01" /></span></label>
+
+          <div class="timbre-group-label">kick sidechain (a real production technique, not a mix compromise)</div>
+          <label title="How much the guitar ducks on every real kick hit.">duck amount<span class="rw"><input type="range" id="gp-guitarDuckAmount" min="0" max="1" value="0.3" step="0.01" /><input type="number" id="gp-guitarDuckAmount-n" min="0" max="1" value="0.3" step="0.01" /></span></label>
+          <label title="Duck length, as a fraction of the given ring's own current pulse duration -- derived, never fixed ms.">duck length (pulse fraction)<span class="rw"><input type="range" id="gp-guitarDuckPulseFraction" min="0.05" max="1" value="0.25" step="0.01" /><input type="number" id="gp-guitarDuckPulseFraction-n" min="0.05" max="1" value="0.25" step="0.01" /></span></label>
+        </div>
+      </details>
+
       <details class="timbre-panel advanced-only" id="mix-meter-panel">
         <summary>mixer (per-channel level, a targeted flute low-mid boost, and a leveler for overall balance) -- a few elegantly designed levers, not another timbre panel</summary>
         <div class="row timbre-presets">
@@ -301,6 +354,7 @@
           <div class="mix-meter-row"><span class="mix-meter-label">note</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-note"></span></span></div>
           <div class="mix-meter-row"><span class="mix-meter-label">flute</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-flute"></span></span></div>
           <div class="mix-meter-row"><span class="mix-meter-label">percussion</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-percussion"></span></span></div>
+          <div class="mix-meter-row"><span class="mix-meter-label">guitar</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-guitar"></span></span></div>
           <div class="mix-meter-row"><span class="mix-meter-label">master</span><span class="mix-meter-track"><span class="mix-meter-fill" id="mix-meter-master"></span></span><span class="mix-meter-clip" id="mix-meter-clip">clip</span></div>
         </div>
         <div class="timbre-grid">
@@ -309,6 +363,7 @@
           <label title="Every kalimba/note hit and hocket ghost-tap click -- previously no standing level control existed for this voice at all, only per-hit velocity.">note (kalimba)<span class="rw"><input type="range" id="mp-mixNote" min="0" max="2" value="1" step="0.01" /><input type="number" id="mp-mixNote-n" min="0" max="2" value="1" step="0.01" /></span></label>
           <label title="The flute's overall level -- raised above the others by default (1.45) to restore the presence the recent de-harshing pass's growl-amount/formant reductions traded away for a softer tone.">flute<span class="rw"><input type="range" id="mp-mixFlute" min="0" max="2" value="1.45" step="0.01" /><input type="number" id="mp-mixFlute-n" min="0" max="2" value="1.45" step="0.01" /></span></label>
           <label title="The resultant-rhythm kick/snare/hat ensemble's own level -- replaces the old standalone 'percussion level' slider, now presettable alongside its siblings.">percussion<span class="rw"><input type="range" id="mp-mixPercussion" min="0" max="2" value="1" step="0.01" /><input type="number" id="mp-mixPercussion-n" min="0" max="2" value="1" step="0.01" /></span></label>
+          <label title="The palm-muted, overdriven guitar/bass voice's own overall level.">guitar<span class="rw"><input type="range" id="mp-mixGuitar" min="0" max="2" value="1" step="0.01" /><input type="number" id="mp-mixGuitar-n" min="0" max="2" value="1" step="0.01" /></span></label>
           <label title="The final output trim, after every channel and the leveler/limiter.">master<span class="rw"><input type="range" id="mp-mixMaster" min="0" max="1" value="0.45" step="0.01" /><input type="number" id="mp-mixMaster-n" min="0" max="1" value="0.45" step="0.01" /></span></label>
 
           <div class="timbre-group-label">flute low-mid boost (targeted register presence, not a tone-color change)</div>

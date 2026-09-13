@@ -1,7 +1,7 @@
-import { deriveTrace, invalidRanges, annotateInputForDisplay } from "./trace.js";
+import { deriveTrace, invalidRanges, annotateInputForDisplay, wordHandedness, splitIntoWords, chordPulseLength } from "./trace.js";
 import { buildProcession, describeSteps, ROTATION_SPOKE_SHIFT } from "./transform.js";
 import { hzForSpoke, PLACEHOLDER_SPOKE_OF, ringForLetter, QWERTY_GLYPH_MAP, REST } from "./letters.js";
-import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS, DEFAULT_PERCUSSION_PARAMS, DEFAULT_MIX_PARAMS } from "./synth.js";
+import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS, DEFAULT_PERCUSSION_PARAMS, DEFAULT_MIX_PARAMS, DEFAULT_GUITAR_PARAMS } from "./synth.js";
 import { Sequencer } from "./sequencer.js";
 import { MidiBridge } from "./midi.js";
 import { WheelView, DEFAULT_VIEW_PARAMS } from "./view.js";
@@ -11,6 +11,8 @@ import { loadPresets, savePreset, deletePreset, loadLastSession, saveLastSession
 import { PictographKeyboard } from "./keyboard.js";
 import { CompactLegend } from "./compactLegend.js";
 import { pixelGlyphSVGMarkup } from "./glyphRender.js";
+import { patternsForRing, velocityForStep, GHOST_VELOCITY } from "./rhythm.js";
+import { deriveArc, arcIntensityAt, stageForIntensity, subdivisionForStage, tierEmphasisForStage, describeArc, ARC_STAGES, ARC_STAGE_COUNT } from "./arc.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -330,17 +332,8 @@ function ringPulsesPerSecond(ring) {
 // against a mechanism quietly changing what it does once its premise no
 // longer holds.
 
-// Same tie-break rule as sequencer.js's wordHandedness -- kept in sync by
-// hand (duplicated, not imported, since sequencer.js's copy is private to
-// its own module) rather than exposing sequencer internals just for this.
-function wordHandedness(word) {
-  if (word.length < 2) return 1;
-  const first = word[0].spoke;
-  const last = word[word.length - 1].spoke;
-  const cw = (last - first + SPOKE_COUNT) % SPOKE_COUNT;
-  const ccw = SPOKE_COUNT - cw;
-  return cw <= ccw ? 1 : -1;
-}
+// wordHandedness now lives in trace.js (imported above) -- shared with
+// sequencer.js's own RingRunner instead of hand-duplicated.
 
 // Restored -- "the trace being stationary with a fading oscilloscope-like
 // tracer following the stylus across the traces would be easier to follow."
@@ -381,20 +374,7 @@ function nextTraceHit(trace, fromIndex, fromSpoke, words) {
   return null; // pathological: trace is nothing but rests
 }
 
-function splitIntoWords(trace) {
-  const words = [];
-  let current = [];
-  for (const entry of trace) {
-    if (entry.isRest) {
-      if (current.length) words.push(current);
-      current = [];
-    } else {
-      current.push(entry);
-    }
-  }
-  if (current.length) words.push(current);
-  return words;
-}
+// splitIntoWords now lives in trace.js (imported above).
 
 let currentTrace = [];
 let currentWords = [];
@@ -578,32 +558,20 @@ let seriesTotalMasterPulses = GRAND_CONVERGENCE_PULSES; // sane pre-Play fallbac
 // spoke-traversal timing), so "one given-ring lap" is a static property
 // of the trace itself, fully computable the instant a phrase loads --
 // no need to wait and measure it from real playback. Mirrors
-// sequencer.js's own private RingRunner timing rules by hand (same
-// "kept in sync by hand" precedent as wordHandedness above), since
-// those aren't exported: melody mode costs shortest-arc pulses between
-// every consecutive pair of trace entries (rests included -- every
-// entry, rest or real, is still a real spoke-arrival the ring must
-// physically travel to, see RingRunner's own traceIndex advance),
-// summed all the way around back to the start; chord mode costs
-// chordPulseLength(word) per word instead (RingRunner._strikeWord),
-// summed over every word.
-const MIN_CHORD_PULSES = 4; // sequencer.js's own private constant, duplicated -- see this block's own comment
-function wordArcForLap(word) {
-  let total = 0;
-  for (let i = 0; i < word.length - 1; i++) {
-    const d = Math.abs(word[i].spoke - word[i + 1].spoke) % SPOKE_COUNT;
-    total += Math.min(d, SPOKE_COUNT - d);
-  }
-  return total;
-}
-function chordPulseLengthForLap(word) {
-  return Math.max(MIN_CHORD_PULSES, wordArcForLap(word));
-}
+// sequencer.js's own RingRunner timing rules exactly, reusing the SAME
+// shared helper (trace.js's chordPulseLength, imported above -- no longer
+// hand-duplicated, see trace.js's own comment): melody mode costs
+// shortest-arc pulses between every consecutive pair of trace entries
+// (rests included -- every entry, rest or real, is still a real
+// spoke-arrival the ring must physically travel to, see RingRunner's own
+// traceIndex advance), summed all the way around back to the start; chord
+// mode costs chordPulseLength(word) per word instead
+// (RingRunner._strikeWord), summed over every word.
 function computeGivenLapRingPulses() {
   if (ringPerformanceMode.given !== "melody") {
     // Chord/arpeggio timing -- both map to sequencer.js's "chord" mode
     // (see applyRingPerformanceMode), same per-word arc timing either way.
-    return currentWords.reduce((sum, w) => sum + chordPulseLengthForLap(w), 0) || SPOKE_COUNT;
+    return currentWords.reduce((sum, w) => sum + chordPulseLength(w), 0) || SPOKE_COUNT;
   }
   if (currentTrace.length === 0) return SPOKE_COUNT; // degenerate guard, never actually reachable (Play requires real input)
   let total = 0;
@@ -649,6 +617,34 @@ function checkSeriesClosed() {
   seriesStartPulse += seriesTotalMasterPulses; // advance by the exact interval just closed, not "now" -- keeps long sessions from drifting
   recomputeSeriesTotalPulses(); // the trace/step-size may have changed since this series began
 }
+
+// The Euclidean pattern engine's own per-ring patterns (src/rhythm.js) --
+// one { n, s, coarse, fine } per ring, rebuilt whenever the phrase (and
+// therefore its own tier-letter census and rootSpoke) changes. Subdivision
+// (`s`) is fixed at 1 here -- it becomes the arc layer's own live output
+// once that exists; this is deliberately built and independently
+// verifiable before that wiring lands (see the plan's own phased build
+// order), so a constant stands in for it for now.
+let currentPatterns = { given: null, received: null, made: null };
+function recomputeRhythmPatterns(subdivision = 1) {
+  for (const ring of ["given", "received", "made"]) {
+    currentPatterns[ring] = patternsForRing(currentTrace, ring, currentRootSpoke, subdivision);
+  }
+}
+
+// Which ring's own Euclidean pattern the guitar chugs on -- "kick-and-chug
+// locked together is genre-defining," so this defaults to `given` (the
+// kick's own ring), matching the pattern engine's own kick/snare/hat role
+// convention. A real, derived default with a manual override, the same
+// convention every other "which ring" choice in this file already has.
+let guitarFollowsRing = "given";
+// A flat cursor into the woven trace's own non-rest letters, advanced once
+// per ACCENTED guitar onset at the "riff" stage -- "the hits carry the
+// melodic information... it literally spells the word across the bar."
+// Deliberately independent of the real RingRunner's own traceIndex (the
+// guitar isn't tied to real geometric hits, see onPulse's own comment) --
+// reset once per Play so a fresh phrase always starts its own riff fresh.
+let guitarLetterCursor = 0;
 // Real bug, root cause of "instant jumps": advanceTransposition used to
 // glide directly between two WRAPPED (0-11) offsets. Whenever
 // old+step >= 12, the wrapped `newOffset` can be numerically LESS than
@@ -869,6 +865,73 @@ const sequencer = new Sequencer({
     if (hc) {
       hc.pulsesElapsed += 1;
       hc.lastPulseTime = performance.now();
+    }
+    // The Euclidean pattern engine (src/rhythm.js) -- a SECOND, independent
+    // percussion clock, deliberately separate from the geometric
+    // resultant-rhythm mechanism below (triggerPercussion, fired from
+    // onNoteHit/onChordHit): this fires on the ring's own real pulse/spoke
+    // position, not on where the typed phrase's letters happen to sit.
+    // Only active in the two pattern-aware modes -- resultant/sparse/roll
+    // stay byte-identical to before. `spoke` is this ring's own live
+    // position (1..SPOKE_COUNT), handed straight in as the pattern's own
+    // step index -- no separate counter, and step 0 of every pattern is
+    // genuinely the ring standing on the wheel's own I pole.
+    if (percussionPatternMode === "euclid" || percussionPatternMode === "woven") {
+      const pattern = currentPatterns[ring];
+      if (pattern) {
+        const pulseSec = 1 / ringPulsesPerSecond(ring);
+        const now = audio.ctx ? audio.ctx.currentTime : 0;
+        for (let j = 0; j < pattern.s; j++) {
+          const step = (spoke - 1) * pattern.s + j;
+          if (!pattern.fine[step % pattern.n]) continue;
+          // Bypasses the density accumulator entirely (via `accent`/
+          // `velocity`, both already-existing gate escape hatches) --
+          // "one onset, one decider": a pattern-decided onset already went
+          // through its own real decision process and is not an
+          // independent resultant-rhythm event for the density arc to
+          // ALSO thin.
+          const tier = velocityForStep(step, pattern.s, pattern.coarse);
+          const atTime = now + (j * pulseSec) / pattern.s;
+          if (tier === "accent") audio.playPercussionHit(ring, { accent: true, atTime });
+          else audio.playPercussionHit(ring, { velocity: tier === "ghost" ? GHOST_VELOCITY : 1, atTime });
+          // The guitar -- "kick-and-chug locked together is genre-
+          // defining" (Gojira/Meshuggah, already named three times in
+          // this codebase's own comments as the tempo/riff-layering
+          // precedent). Triggered by the SAME onset stream as the
+          // percussion pattern above, on whichever ring guitarFollowsRing
+          // names (default given, the kick's own ring) -- not by raw
+          // geometric hits, which would just duplicate the kalimba's own
+          // shape. `ARC_STAGES[lastArcStage].guitar` gates both WHETHER
+          // it plays at all ("off") and whether only accents sound
+          // ("pedal"/"pedal+letring") or every onset does ("riff").
+          if (ring === guitarFollowsRing) {
+            const guitarBehavior = ARC_STAGES[Math.max(0, lastArcStage)].guitar;
+            const playsThisOnset = guitarBehavior === "riff" || (guitarBehavior !== "off" && tier === "accent");
+            if (playsThisOnset) {
+              // Accented onsets spell the current word across the bar (a
+              // real riff); every other onset (and every onset at a
+              // pedal-only stage) sits on the phrase's own root -- a
+              // pedal tone, the low-string-drone character the genre is
+              // built on.
+              let spokeToPlay = currentRootSpoke;
+              if (guitarBehavior === "riff" && tier === "accent") {
+                const allLetters = currentWords.flat();
+                if (allLetters.length) {
+                  spokeToPlay = allLetters[guitarLetterCursor % allLetters.length].spoke;
+                  guitarLetterCursor += 1;
+                }
+              }
+              const chugSec = (pulseSec / pattern.s) * audio.guitarParams.guitarChugTightness;
+              audio.playGuitarChug(ring, hzForSpoke(transposedSpoke(spokeToPlay)), {
+                velocity: tier === "ghost" ? GHOST_VELOCITY : 1,
+                atTime,
+                chugSec,
+                attackFraction: audio.guitarParams.guitarChugAttackFraction,
+              });
+            }
+          }
+        }
+      }
     }
   },
   onNoteHit: (ring, target, traceIndex) => {
@@ -1136,6 +1199,16 @@ const sequencer = new Sequencer({
     // the breath cycle's own steady thump, a genuinely different event).
     audio.playNote(hzForSpoke(transposedSpoke(1)) * RING_OCTAVE_MULTIPLIER.received, { duration: 1.4, velocity: 1.3, ring: "received" });
     audio.playConvergenceAccent();
+    // Let-ring guitar punctuation -- structural events reusing an
+    // existing voice, the same "accents reuse existing voices at a
+    // boosted level, not new instruments" convention this engine already
+    // follows for percussion accents. Only once the arc has actually
+    // brought the guitar past a pedal-only stage (driving/djent, per
+    // ARC_STAGES' own guitar column) -- a monastic/processional
+    // performance stays exactly as quiet as it already was.
+    if (ARC_STAGES[Math.max(0, lastArcStage)].guitar === "pedal+letring" || ARC_STAGES[Math.max(0, lastArcStage)].guitar === "riff") {
+      audio.playGuitarChug("received", hzForSpoke(transposedSpoke(1)), { velocity: 1, letRing: true, chugSec: 1 });
+    }
     // "A cohesive, pulsating... object" -- the whole figure's own bigger
     // climax pulse, same weight distinction as the audio side already
     // makes (playConvergenceAccent vs playBreathAccent below). The
@@ -1153,6 +1226,9 @@ const sequencer = new Sequencer({
     // The steady, subtle whole-figure pulse -- same real anchor the audio
     // accent above already uses.
     view.pulseFigure("breath");
+    if (ARC_STAGES[Math.max(0, lastArcStage)].guitar === "pedal+letring" || ARC_STAGES[Math.max(0, lastArcStage)].guitar === "riff") {
+      audio.playGuitarChug(guitarFollowsRing, hzForSpoke(transposedSpoke(currentRootSpoke)), { velocity: 0.7, letRing: true, chugSec: 1 });
+    }
   },
   // "Ring retrograde/prograde reversals could be punctuated by accent
   // notes and accent percussion hits." A real reversal (sequencer.js's
@@ -1164,6 +1240,12 @@ const sequencer = new Sequencer({
   onDirectionReversal: (ring, spoke) => {
     audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: 0.9, velocity: 1.3, ring });
     audio.playPercussionHit(ring, { accent: true });
+    if (
+      ring === guitarFollowsRing &&
+      (ARC_STAGES[Math.max(0, lastArcStage)].guitar === "pedal+letring" || ARC_STAGES[Math.max(0, lastArcStage)].guitar === "riff")
+    ) {
+      audio.playGuitarChug(ring, hzForSpoke(transposedSpoke(spoke)), { velocity: 1, letRing: true, chugSec: 0.8 });
+    }
     // "I'd like the radial timekeeping cursor itself to emit echoes,
     // especially on events like reversals" -- a real, comparatively rare
     // structural event (this ring's own sweep genuinely flipping
@@ -1205,16 +1287,76 @@ function logConvergence() {
 // system (spokePoint3D, per-ring axes, the transposition-tilt-toward-
 // marker) is retired; the trace is flat again, same plain spokePoint the
 // structural diagram already uses.
-// "Ebbing and flowing with processions/across the full arc of procession"
-// -- peaks (1.0) exactly AT grand convergence, dips (0.35, never fully
-// silent) at the cycle's own midpoint, cosine-shaped between. Real and
-// synchronized to the actual ring state (sequencer.masterPulseCount), not
-// a decorative LFO with a similar-looking period. Drives percussion
-// density (tickRate below) -- real musical structure, not a fabricated
-// signal.
-function convergenceAmplitude() {
-  const convergencePhase = (sequencer.masterPulseCount % GRAND_CONVERGENCE_PULSES) / GRAND_CONVERGENCE_PULSES;
-  return 0.35 + (1 - 0.35) * (0.5 + 0.5 * Math.cos(2 * Math.PI * convergencePhase));
+
+// The input-driven intensity arc (src/arc.js) -- "ebbing and flowing with
+// processions/across the full arc of procession," now genuinely input-
+// derived rather than a fixed-period cosine. convergenceAmplitude() (the
+// engine's ONLY prior intensity signal -- peaks at grand convergence,
+// floor 0.35, cosine-shaped, completely independent of what was typed) is
+// retired outright, per this project's own standing discipline against a
+// superseded mechanism quietly surviving alongside its replacement: it was
+// always a placeholder standing in for an arc that didn't exist yet.
+//
+// currentArc is rebuilt every Play (see the Play handler) from the WOVEN
+// trace's own words -- see deriveArc's own comment for why the woven
+// trace, not just the typed call.
+let currentArc = deriveArc({ words: [] });
+// Derived by default, manual override always available -- the same
+// "scale-follows-input"/"chamber-follows-input" convention this engine
+// already uses everywhere else. `arcShapeOverride` is independent of this
+// toggle (see index.html's own arc-shape select) -- it replaces only the
+// arc's SHAPE component, live, whether the arc is following input or not.
+let arcFollowsInput = true;
+let arcShapeOverride = null;
+// The last real stage actually applied -- `applyArcStage` only fires on a
+// genuine transition (see tickRate's own call site), the same "write only
+// on change" discipline main.js's other discrete dials already follow, so
+// selecting a vibe preset (or dragging the manual slider) is never
+// immediately re-clobbered by a redundant re-application of the SAME stage.
+let lastArcStage = -1;
+
+// The arc's own live intensity, read fresh every frame (main.js's own
+// established "read live state, don't cache" convention). Following
+// input: reads the ALREADY-COMPUTED transposition-series clock's own
+// progress (see recomputeSeriesTotalPulses/checkSeriesClosed's own
+// comments for why this clock, not a new one) through arcIntensityAt.
+// Not following: the manual slider drives it directly, same relationship
+// the manual scale field has to `scale-follows-input`.
+function currentArcIntensity() {
+  if (arcFollowsInput) {
+    const p = seriesTotalMasterPulses > 0 ? (sequencer.masterPulseCount - seriesStartPulse) / seriesTotalMasterPulses : 0;
+    return arcIntensityAt(currentArc, p, arcShapeOverride);
+  }
+  return parseFloat($("arc-intensity").value);
+}
+
+// Writes the arc's own discrete levers for one stage -- ONLY ever called
+// on a genuine stage transition (see call sites: tickRate's own per-frame
+// check, gated to arcFollowsInput; the manual intensity slider/stage
+// picker's own listeners, an explicit user action either way). Reuses the
+// exact fireChange/setSliderValue idiom every other programmatic lever
+// write in this file already uses, so the UI visibly moves as the arc
+// progresses -- "one owner at a time, visibly." Owns lastArcStage itself
+// (rather than trusting every call site to also remember to update it) --
+// a real bug was found and fixed here: the guitar's own stage-gating
+// (onPulse/onGrandConvergence/onBreathCycle/onDirectionReversal, all read
+// lastArcStage directly) went permanently silent under a MANUAL stage
+// pick, because manual mode never runs through tickRate's own per-frame
+// tracker at all, so lastArcStage stayed frozen at Play's own reset value
+// (-1) forever. Setting it HERE means every real application of a stage,
+// automatic or manual, keeps every reader in sync by construction.
+function applyArcStage(stage) {
+  lastArcStage = stage;
+  const def = ARC_STAGES[stage];
+  fireChange("percussion-pattern-mode", def.percussionPatternMode);
+  for (const ring of ["given", "received", "made"]) fireChange(`mode-${ring}`, def.ringModes[ring]);
+  setSliderValue("tier-emphasis", tierEmphasisForStage(stage));
+  recomputeRhythmPatterns(subdivisionForStage(stage));
+}
+
+function updateArcReadout(I) {
+  const el = $("arc-readout");
+  if (el) el.textContent = describeArc(currentArc, I);
 }
 
 function render() {
@@ -1277,6 +1419,7 @@ const mixMeterBars = {
   note: $("mix-meter-note"),
   flute: $("mix-meter-flute"),
   percussion: $("mix-meter-percussion"),
+  guitar: $("mix-meter-guitar"),
   master: $("mix-meter-master"),
 };
 const mixMeterClip = $("mix-meter-clip");
@@ -1304,9 +1447,23 @@ function tickRate() {
   const masterPulsesPerSecond = sequencer.pulsesPerSecond;
   audio.setProcessionPulseRate(masterPulsesPerSecond);
   $("bpm-readout").textContent = `${Math.round(masterPulsesPerSecondToBpm(masterPulsesPerSecond))} BPM`;
-  // See convergenceAmplitude's own comment -- shared with the trace
-  // echoes' own brightness/color modulation now.
-  audio.setPercussionDensity(convergenceAmplitude());
+  // The arc's own live intensity -- density floor becomes 1/SPOKE_COUNT
+  // (E(1,12), the minimal Euclidean pattern -- one onset per lap) instead
+  // of convergenceAmplitude's old bare 0.35, and the ceiling is genuinely
+  // input-derived instead of a fixed cosine peak. See currentArcIntensity's
+  // own comment.
+  const arcIntensity = currentArcIntensity();
+  audio.setPercussionDensity(1 / SPOKE_COUNT + (1 - 1 / SPOKE_COUNT) * arcIntensity);
+  // Discrete lever writes (pattern mode, ring modes, tierEmphasis,
+  // subdivision) only fire on a genuine stage transition, and only while
+  // the arc is actually the one authoring them -- a vibe preset (or a
+  // direct manual slider/stage-picker drag, which applies its own stage
+  // immediately on interaction, see index.html's own listeners) owns
+  // those levers completely once arc-follows-input is off, never
+  // re-clobbered by a stale per-frame re-application.
+  const arcStage = stageForIntensity(arcIntensity);
+  if (arcFollowsInput && arcStage !== lastArcStage) applyArcStage(arcStage);
+  updateArcReadout(arcIntensity);
   // Mixer meters -- riding this SAME rAF chain rather than a second loop
   // (see the removed duplicate-render-loop comment further down in this
   // file for exactly why that's a real regression class here). Cheap
@@ -1428,6 +1585,34 @@ $("play").addEventListener("click", () => {
     // recomputed every Play, not just once at module load.
     seriesStartPulse = sequencer.masterPulseCount;
     recomputeSeriesTotalPulses();
+    // The intensity arc (src/arc.js) -- a fresh phrase means a fresh word
+    // count/word-length sequence, its own ceiling and shape.
+    currentArc = deriveArc({ words: currentWords });
+    // Following input: force lastArcStage to -1 so tickRate's very next
+    // frame detects a genuine change and runs a REAL applyArcStage(0) --
+    // the previous phrase may have left the discrete levers (pattern
+    // mode/ring modes/tierEmphasis) sitting on a totally different stage,
+    // and those need a real, fresh stage-0 application, not just a
+    // subdivision rebuild.
+    //
+    // NOT following input: applyArcStage never runs automatically at all
+    // (manual mode's whole point is that those levers stay wholly
+    // manual/vibe-owned, "one owner at a time") -- so lastArcStage must be
+    // set to the REAL current manual stage directly, right here, or every
+    // reader of it (the guitar's own stage-gating in onPulse/
+    // onGrandConvergence/onBreathCycle/onDirectionReversal) would see a
+    // stale -1 ("off") forever after this Play, regardless of whatever
+    // stage was actually selected beforehand -- a real bug, found and
+    // fixed at this exact point.
+    lastArcStage = arcFollowsInput ? -1 : stageForIntensity(currentArcIntensity());
+    // The Euclidean pattern engine's own per-ring patterns -- rootSpoke and
+    // the trace's own tier-letter census both just changed with the new
+    // phrase (see rhythm.js's patternsForRing), so these need rebuilding
+    // every Play too, at whatever subdivision the CURRENT stage implies
+    // (stage 0 if following input -- tickRate's own next frame both
+    // confirms and re-applies this for real; the manual stage otherwise).
+    recomputeRhythmPatterns(subdivisionForStage(Math.max(0, lastArcStage)));
+    guitarLetterCursor = 0;
     // Master hull -- the whole phrase's own shape (every non-rest letter,
     // in order, regardless of which ring ends up voicing it), so a word
     // whose letters disperse across all three tiers still shows a real
@@ -1823,6 +2008,7 @@ const DRONE_PANEL_KEYS = [
 ];
 const VIEW_PANEL_KEYS = Object.keys(DEFAULT_VIEW_PARAMS);
 const PERCUSSION_PANEL_KEYS = Object.keys(DEFAULT_PERCUSSION_PARAMS);
+const GUITAR_PANEL_KEYS = Object.keys(DEFAULT_GUITAR_PARAMS);
 const MIX_PANEL_KEYS = Object.keys(DEFAULT_MIX_PARAMS);
 
 wireTimbrePanel({
@@ -1880,6 +2066,45 @@ wireTimbrePanel({
   deleteBtnId: "percussion-preset-delete",
   resetBtnId: "percussion-preset-reset",
 });
+
+// "A new rhythmic, palm-muted, overdriven, drop-tuned guitar/bass
+// instrument." Same wireTimbrePanel reuse as every panel above -- named
+// presets, factory reset, and last-session persistence for free.
+wireTimbrePanel({
+  category: "guitar",
+  idPrefix: "gp",
+  keys: GUITAR_PANEL_KEYS,
+  setParam: (key, value) => audio.setGuitarParam(key, value),
+  defaults: DEFAULT_GUITAR_PARAMS,
+  presetSelectId: "guitar-preset-select",
+  saveBtnId: "guitar-preset-save",
+  deleteBtnId: "guitar-preset-delete",
+  resetBtnId: "guitar-preset-reset",
+});
+
+// Real, named kits -- same "hardcoded named preset object" pattern
+// PERCUSSION_KIT_PRESETS already uses. `chug` is DEFAULT_GUITAR_PARAMS
+// itself; `doom` trades tightness/drive for a looser, lower, heavier
+// character; `fuzz` pushes drive further with a wider detune spread.
+const GUITAR_KIT_PRESETS = {
+  chug: { ...DEFAULT_GUITAR_PARAMS },
+  doom: {
+    ...DEFAULT_GUITAR_PARAMS,
+    guitarDriveAmount: 0.45, guitarScoopDb: -3, guitarCabLowpassHz: 3600,
+    guitarSubAmount: 0.55, guitarChugTightness: 1.4, guitarDuckAmount: 0.2,
+  },
+  fuzz: {
+    ...DEFAULT_GUITAR_PARAMS,
+    guitarDriveAmount: 0.85, guitarDetuneCents: 14, guitarScoopDb: -8,
+    guitarSubAmount: 0.2, guitarChugTightness: 0.8,
+  },
+};
+$("guitar-kit-preset").addEventListener("change", (e) => {
+  const kit = GUITAR_KIT_PRESETS[e.target.value];
+  if (!kit) return; // "(custom)"
+  for (const key of GUITAR_PANEL_KEYS) setSliderValue(`gp-${key}`, kit[key]);
+});
+$("guitar-follows-ring").addEventListener("change", (e) => { guitarFollowsRing = e.target.value; });
 
 // The mixer -- "a few more elegantly designed levers" for overall sound
 // balancing. Same wireTimbrePanel reuse as every panel above; replaces the
@@ -1963,6 +2188,7 @@ $("export-settings").addEventListener("click", () => {
     drone: currentCategoryValues("dp", DRONE_PANEL_KEYS),
     view: currentCategoryValues("vp", VIEW_PANEL_KEYS),
     percussion: currentCategoryValues("pp", PERCUSSION_PANEL_KEYS),
+    guitar: currentCategoryValues("gp", GUITAR_PANEL_KEYS),
     mix: currentCategoryValues("mp", MIX_PANEL_KEYS),
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -1990,6 +2216,7 @@ $("import-settings-file").addEventListener("change", async (e) => {
     apply("dp", DRONE_PANEL_KEYS, data.drone);
     apply("vp", VIEW_PANEL_KEYS, data.view);
     apply("pp", PERCUSSION_PANEL_KEYS, data.percussion);
+    apply("gp", GUITAR_PANEL_KEYS, data.guitar);
     apply("mp", MIX_PANEL_KEYS, data.mix);
   } catch (err) {
     alert("Couldn't read that settings file: " + err.message);
@@ -2046,6 +2273,15 @@ let percussionPatternMode = "resultant";
 $("percussion-pattern-mode").addEventListener("change", (e) => { percussionPatternMode = e.target.value; });
 
 function triggerPercussion(ring, owned) {
+  // "euclid" -- the Euclidean pattern engine (onPulse, above) plays alone;
+  // the geometric resultant-rhythm layer is fully muted here, a real
+  // authored timeline rather than an emergent one. "woven" leaves this
+  // path unmuted (falls through to the same resultant behavior as
+  // default) -- the pattern plays underneath it as the timekeeping floor,
+  // both layers audible together, matching the cited West/Central African
+  // tradition's own real ensemble shape (a fixed bell timeline plus
+  // responsive drums), which this engine has only ever had half of.
+  if (percussionPatternMode === "euclid") return;
   if (percussionPatternMode === "sparse" && !owned) return;
   const sounded = audio.playPercussionHit(ring);
   if (sounded && percussionPatternMode === "roll") {
@@ -2056,9 +2292,15 @@ function triggerPercussion(ring, owned) {
     // density gate (gainMultiplier !== null) -- an echo embellishes an
     // already-decided real hit, it isn't a second independent
     // resultant-rhythm event for the density arc to separately thin.
-    const pulseMs = 1000 / ringPulsesPerSecond(ring);
-    setTimeout(() => audio.playPercussionHit(ring, { gainMultiplier: 0.45 }), pulseMs * 0.15);
-    setTimeout(() => audio.playPercussionHit(ring, { gainMultiplier: 0.22 }), pulseMs * 0.3);
+    // Scheduled against the real AudioContext clock (`atTime`), not
+    // `setTimeout` -- a real, if usually inaudible, main-thread-jitter bug
+    // found while designing the Euclidean pattern engine (src/rhythm.js),
+    // which schedules onsets far more densely and at tighter spacing than
+    // this ever did; fixed here too rather than left as a latent hazard.
+    const pulseSec = 1 / ringPulsesPerSecond(ring);
+    const now = audio.ctx ? audio.ctx.currentTime : 0;
+    audio.playPercussionHit(ring, { gainMultiplier: 0.45, atTime: now + pulseSec * 0.15 });
+    audio.playPercussionHit(ring, { gainMultiplier: 0.22, atTime: now + pulseSec * 0.3 });
   }
 }
 
@@ -2074,6 +2316,40 @@ function applyWhistleFollow(following) {
 }
 applyWhistleFollow($("whistle-follow").checked);
 $("whistle-follow").addEventListener("change", (e) => applyWhistleFollow(e.target.checked));
+
+// The intensity arc's own manual-override controls (src/arc.js) -- same
+// "follows input by default, the manual control disabled while following"
+// relationship applyWhistleFollow just established for the flute's pitch.
+function applyArcFollowsInput(following) {
+  arcFollowsInput = following;
+  $("arc-intensity").disabled = following;
+  $("arc-stage-select").disabled = following;
+}
+applyArcFollowsInput($("arc-follows-input").checked);
+$("arc-follows-input").addEventListener("change", (e) => {
+  applyArcFollowsInput(e.target.checked);
+  // An explicit toggle-off is a real request for manual control right
+  // now -- apply whatever the manual slider currently reads immediately,
+  // rather than leaving the arrangement sitting on whatever stage the
+  // derived arc last left it at.
+  if (!e.target.checked) applyArcStage(stageForIntensity(currentArcIntensity()));
+});
+$("arc-intensity").addEventListener("input", (e) => {
+  if (arcFollowsInput) return; // disabled while following -- stay honest either way
+  applyArcStage(stageForIntensity(parseFloat(e.target.value)));
+});
+$("arc-stage-select").addEventListener("change", (e) => {
+  // A convenience shortcut, not a second source of truth -- sets the
+  // manual intensity slider to a representative value INSIDE that
+  // stage's own range (its midpoint), which fires the listener just
+  // above and applies the stage from there, so the two manual controls
+  // can never silently disagree with each other.
+  const stage = parseInt(e.target.value, 10);
+  setSliderValue("arc-intensity", ((stage + 0.5) / ARC_STAGE_COUNT).toFixed(2));
+});
+$("arc-shape-override").addEventListener("change", (e) => {
+  arcShapeOverride = e.target.value || null;
+});
 
 // Which harmonic series this ring's fixed chamber speaks -- "open" (every
 // harmonic, a real transverse flute) or "stopped" (odd harmonics only, the
@@ -2170,6 +2446,12 @@ function fireChange(id, value) {
 function applyVibePreset(name) {
   const vibe = VIBE_PRESETS[name];
   if (!vibe) return; // "(custom)" -- leave whatever's currently set alone
+  // "One owner at a time, visibly" -- a vibe is a real, explicit request to
+  // set every one of these same levers by hand; the arc (which owns them
+  // while following input) stands down rather than re-deriving over top
+  // of what was just chosen. Re-checking arc-follows-input hands control
+  // back at any time.
+  fireChange("arc-follows-input", false);
   for (const ring of ["given", "received", "made"]) {
     fireChange(`mode-${ring}`, vibe.mode[ring]);
     fireChange(`arpeggio-direction-${ring}`, vibe.direction[ring]);
