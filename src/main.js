@@ -5,13 +5,13 @@ import { OrphographAudio, DEFAULT_NOTE_PARAMS, DEFAULT_DRONE_PARAMS, DEFAULT_PER
 import { Sequencer } from "./sequencer.js";
 import { MidiBridge } from "./midi.js";
 import { WheelView, DEFAULT_VIEW_PARAMS } from "./view.js";
-import { RING_OCTAVE_MULTIPLIER, ringSpeedMultiplier, SPOKE_COUNT, masterPulsesPerSecondToBpm, rotateSpoke, GRAND_CONVERGENCE_PULSES, transpositionCycleSteps } from "./wheel.js";
+import { RING_OCTAVE_MULTIPLIER, ringSpeedMultiplier, SPOKE_COUNT, PULSES_PER_BEAT, masterPulsesPerSecondToBpm, rotateSpoke, GRAND_CONVERGENCE_PULSES, transpositionCycleSteps } from "./wheel.js";
 import { loadAllPhrases, addPhrase, deletePhrase, isDefaultPhrase } from "./phrases.js";
 import { loadPresets, savePreset, deletePreset, loadLastSession, saveLastSession } from "./timbrePresets.js";
 import { PictographKeyboard } from "./keyboard.js";
 import { CompactLegend } from "./compactLegend.js";
 import { pixelGlyphSVGMarkup } from "./glyphRender.js";
-import { patternsForRing, velocityForStep, GHOST_VELOCITY } from "./rhythm.js";
+import { patternsForRing, patternsForMotif, velocityForStep, GHOST_VELOCITY } from "./rhythm.js";
 import { deriveArc, arcIntensityAt, stageForIntensity, subdivisionForStage, tierEmphasisForStage, describeArc, ARC_STAGES, ARC_STAGE_COUNT } from "./arc.js";
 import { deriveMotifs } from "./motif.js";
 
@@ -652,19 +652,43 @@ function recomputeRhythmPatterns(subdivision = 1) {
   }
 }
 
+// "Informed by the content of the pattern, not just density." Derived by
+// default, manual override always available -- the same convention
+// `scale-follows-input`/`chamber-follows-input`/`arc-follows-input`
+// already use. ON: every ring's own Euclidean pattern is rebuilt LIVE,
+// every pulse, from whichever motif that ring is CURRENTLY inside
+// (currentMotifByRing, src/motif.js's patternsForMotif) -- cheap, pure
+// 12*s-length array math, no cache to invalidate on a word change. OFF:
+// the OLD phrase-wide statistical patterns (currentPatterns, above,
+// rebuilt only at Play/stage-change) stay byte-identical to before this
+// phase, for A/B comparison by ear -- see the plan's own honest risk
+// section on why this is a real gamble, not a safe default with no
+// fallback.
+let rhythmFollowsMotif = true;
+
+// Subdivision decoupled from arrangement intensity: `subdivisionForStage`
+// (arc.js) ties articulation FINENESS to the arc's own STAGE, which is
+// why "heavy" and "busy" used to be the same axis. Following motif: a
+// word's own cardinality (how many distinct spokes it actually touches)
+// decides how finely it's articulated -- zero new constants, just
+// ARC_STAGE_COUNT/PULSES_PER_BEAT this file already imports. Not
+// following: the old stage-driven formula, unchanged, feeding the OFF
+// path's own recomputeRhythmPatterns calls (see applyArcStage/Play).
+function currentSubdivision() {
+  if (rhythmFollowsMotif) {
+    const motif = currentMotifByRing.given;
+    const cardinality = motif ? motif.cardinality : 1;
+    return Math.max(1, Math.min(ARC_STAGE_COUNT, Math.round(cardinality / PULSES_PER_BEAT)));
+  }
+  return subdivisionForStage(Math.max(0, lastArcStage));
+}
+
 // Which ring's own Euclidean pattern the guitar chugs on -- "kick-and-chug
 // locked together is genre-defining," so this defaults to `given` (the
 // kick's own ring), matching the pattern engine's own kick/snare/hat role
 // convention. A real, derived default with a manual override, the same
 // convention every other "which ring" choice in this file already has.
 let guitarFollowsRing = "given";
-// A flat cursor into the woven trace's own non-rest letters, advanced once
-// per ACCENTED guitar onset at the "riff" stage -- "the hits carry the
-// melodic information... it literally spells the word across the bar."
-// Deliberately independent of the real RingRunner's own traceIndex (the
-// guitar isn't tied to real geometric hits, see onPulse's own comment) --
-// reset once per Play so a fresh phrase always starts its own riff fresh.
-let guitarLetterCursor = 0;
 
 // Real polymeter's own persistent cursor (src/rhythm.js's polyFine/polyN)
 // -- deliberately module-level state, NOT derived from the wheel's own
@@ -924,7 +948,10 @@ const sequencer = new Sequencer({
     // step index -- no separate counter, and step 0 of every pattern is
     // genuinely the ring standing on the wheel's own I pole.
     if (percussionPatternMode === "euclid" || percussionPatternMode === "woven") {
-      const pattern = currentPatterns[ring];
+      const currentMotif = currentMotifByRing[ring];
+      const pattern = rhythmFollowsMotif && currentMotif
+        ? patternsForMotif(currentMotif, ring, currentSubdivision())
+        : currentPatterns[ring];
       if (pattern) {
         const stage = Math.max(0, lastArcStage);
         const stageDef = ARC_STAGES[stage];
@@ -1004,18 +1031,25 @@ const sequencer = new Sequencer({
             const guitarBehavior = stageDef.guitar;
             const playsThisOnset = guitarBehavior === "riff" || (guitarBehavior !== "off" && tier === "accent");
             if (playsThisOnset) {
-              // Accented onsets spell the current word across the bar (a
-              // real riff); every other onset (and every onset at a
-              // pedal-only stage) sits on the phrase's own root -- a
-              // pedal tone, the low-string-drone character the genre is
-              // built on.
-              let spokeToPlay = currentRootSpoke;
-              if (guitarBehavior === "riff" && tier === "accent") {
-                const allLetters = currentWords.flat();
-                if (allLetters.length) {
-                  spokeToPlay = allLetters[guitarLetterCursor % allLetters.length].spoke;
-                  guitarLetterCursor += 1;
-                }
+              // Accented onsets spell the CURRENT MOTIF across the bar (a
+              // real riff -- a short cell repeated against a stable grid,
+              // see src/motif.js's own header); every other onset (and
+              // every onset at a pedal-only stage) sits on that same
+              // motif's own root -- a pedal tone, the low-string-drone
+              // character the genre is built on. Was a single flat
+              // cursor (guitarLetterCursor) walking the ENTIRE phrase's
+              // own letters, advancing only on accents and never
+              // resetting per word -- not a riff, a slow serial readout
+              // that never actually repeated. `accentIndex` is DERIVED
+              // from the step itself (which accent slot this is within
+              // the current bar), not a persistent counter -- the same
+              // riff cell recurs every time the bar loops, the real
+              // "repeated against a stable grid" character a riff needs.
+              let spokeToPlay = currentMotif ? currentMotif.root : currentRootSpoke;
+              if (guitarBehavior === "riff" && tier === "accent" && currentMotif && currentMotif.spokes.length) {
+                const accentEvery = PULSES_PER_BEAT * pattern.s * (stageDef.halfTime ? 2 : 1);
+                const accentIndex = Math.floor(step / accentEvery);
+                spokeToPlay = currentMotif.spokes[accentIndex % currentMotif.spokes.length];
               }
               const chugSec = (pulseSec / pattern.s) * audio.guitarParams.guitarChugTightness;
               audio.playGuitarChug(ring, hzForSpoke(transposedSpoke(spokeToPlay)), {
@@ -1774,7 +1808,6 @@ $("play").addEventListener("click", () => {
     // (stage 0 if following input -- tickRate's own next frame both
     // confirms and re-applies this for real; the manual stage otherwise).
     recomputeRhythmPatterns(subdivisionForStage(Math.max(0, lastArcStage)));
-    guitarLetterCursor = 0;
     polymetricCursor.given = polymetricCursor.received = polymetricCursor.made = 0;
     breakdownActive = false;
     // Master hull -- the whole phrase's own shape (every non-rest letter,
@@ -2501,6 +2534,17 @@ $("arc-follows-input").addEventListener("change", (e) => {
 $("arc-intensity").addEventListener("input", (e) => {
   if (arcFollowsInput) return; // disabled while following -- stay honest either way
   applyArcStage(stageForIntensity(parseFloat(e.target.value)));
+});
+// The rhythm reframe's own A/B toggle (src/rhythm.js's patternsForMotif) --
+// no disabled-control coupling needed, unlike arc-follows-input above:
+// the OLD phrase-wide patterns (currentPatterns) are always kept current
+// regardless of this checkbox (recomputeRhythmPatterns already runs
+// unconditionally at Play/stage-change), so flipping this is a pure,
+// instantaneous A/B on which source onPulse reads, with nothing else to
+// reconcile.
+rhythmFollowsMotif = $("rhythm-follows-motif").checked;
+$("rhythm-follows-motif").addEventListener("change", (e) => {
+  rhythmFollowsMotif = e.target.checked;
 });
 $("arc-stage-select").addEventListener("change", (e) => {
   // A convenience shortcut, not a second source of truth -- sets the

@@ -120,6 +120,10 @@
         <span id="arc-readout" class="status"></span>
       </div>
 
+      <label class="inline advanced-only" title="ON (default): each ring's own Euclidean pattern (in euclid/woven percussion mode) is read directly off whichever WORD that ring is currently sounding -- the word's own spoke set becomes the bar's onset pattern, and articulation fineness (subdivision) follows that word's own cardinality instead of the arc's stage. This is what makes two different words with the same letter COUNT sound rhythmically different. OFF: the older phrase-wide statistical pattern (one Euclidean count per ring, built from the whole phrase's own letter census) -- kept for direct A/B by ear, since a word's own place-of-articulation geometry as a rhythm is a real, falsifiable bet, not a guaranteed improvement.">
+        <input type="checkbox" id="rhythm-follows-motif" checked /> rhythm follows motif (word's own spoke pattern, not phrase-wide census)
+      </label>
+
       <label class="advanced-only" title="A universal grounding tempo, fixed rather than adjustable -- 72 BPM is the classic textbook average resting heart rate, the same steady, unwavering pulse Gojira ('The Art of Dying') and Meshuggah ('Clockworks') both run beneath otherwise complex/polymetric material. The 6:8:12 rings' own speeds derive from this one anchor; it no longer moves.">
         ground tempo (fixed -- a resting heart-rate anchor) -- <span id="bpm-readout">0 BPM</span>
       </label>

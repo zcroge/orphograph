@@ -17,8 +17,9 @@
 // (same "pure spoke-domain math" shape). Callers (main.js's onPulse
 // scheduler) turn a returned pattern into real playPercussionHit calls.
 
-import { SPOKE_COUNT, normalizeSpoke, PULSES_PER_BEAT } from "./wheel.js";
+import { SPOKE_COUNT, normalizeSpoke, rotateSpoke, mirrorSpoke, PULSES_PER_BEAT } from "./wheel.js";
 import { ringForLetter } from "./letters.js";
+import { ROTATION_SPOKE_SHIFT } from "./transform.js";
 
 // Reuses the exact number main.js's existing "roll" pattern mode already
 // uses for its own first grace-note flam -- a ghost-tier onset here is the
@@ -151,6 +152,97 @@ export function patternsForRing(trace, ring, rootSpoke, subdivision = 1) {
     polyN,
     polyFine: rotatePattern(euclid(kPoly, polyN), rotation * s),
   };
+}
+
+// The rhythm reframe: "informed by the content of the pattern, not just
+// 'density' of notes." patternsForRing above reduces a whole ring's
+// tier-letter CENSUS to a single count k -- two different phrases with
+// the same per-ring letter count produce byte-identical rhythms, and a
+// word's own letter ORDER never reaches percussion at all. This is the
+// same load-bearing identity src/motif.js's own header states: SPOKE_COUNT
+// = 12 and hzForSpoke is one semitone per spoke, so a word's own spoke
+// SET is simultaneously a pitch-class set and a 12-step onset vector --
+// `motif.onsets` IS the bar, with no new mapping invented.
+//
+// Three ring LENSES, fixed by the wheel's own operator triple (not by
+// taste, and not per-word): `given` = T0 (the ground states the motif as
+// -is), `received` = T7 (ROTATION_SPOKE_SHIFT -- transform.js's own
+// canonical answer for "no ground compels a specific rotation"), `made` =
+// I (mirrorSpoke). Three rings reading three D12 images of the SAME cell
+// is, precisely, three-voice isorhythmic motet writing, and precisely the
+// guitar-against-kick relationship real djent/metalcore rhythm sections
+// are built on -- free, because the identity above already ties pitch and
+// rhythm together.
+const RING_LENS = {
+  given: (spoke) => spoke,
+  received: (spoke) => rotateSpoke(spoke, ROTATION_SPOKE_SHIFT),
+  made: (spoke) => mirrorSpoke(spoke),
+};
+
+function applyRingLens(onsets, ring) {
+  const lens = RING_LENS[ring] || RING_LENS.given;
+  const result = new Array(SPOKE_COUNT).fill(false);
+  for (let i = 0; i < SPOKE_COUNT; i++) {
+    if (!onsets[i]) continue;
+    result[lens(i + 1) - 1] = true;
+  }
+  return result;
+}
+
+// `euclid` is retained here, demoted to a REGULARIZER for three closed,
+// measured cases -- "keep the density, restore metric legibility" when a
+// word's own geometry would otherwise produce a degenerate or illegible
+// bar. All three conditions are measured off the motif itself, no tuning:
+//   1. cardinality === 1 -- one onset isn't a pattern.
+//   2. cardinality >= 10 -- a near-constant stream reads as no pattern.
+//   3. evenness < 1/cardinality -- the onsets are so clumped the bar has
+//      no felt pulse at all (see motif.js's own evenness formula).
+// Everything else plays the word's own onsets directly.
+function baseOnsetsForMotif(motif) {
+  const k = motif.cardinality;
+  const regularize = k === 1 || k >= 10 || motif.evenness < 1 / k;
+  return regularize ? euclid(k, SPOKE_COUNT) : motif.onsets;
+}
+
+// Expands a 12-step `coarse` pattern to `n = 12*s` fine steps: each coarse
+// onset lands on its own sub-step 0 (so the coarse grid is always exactly
+// recoverable from the fine one, same contract velocityForStep already
+// relies on), and at s>1 a proportionally-scaled Euclidean fill (SAME
+// k*s scaling patternsForRing already used) supplies ghost-tier texture
+// in between -- articulation detail, not a second onset source competing
+// with the motif's own content.
+function expandOnsets(coarse, s) {
+  const n = coarse.length * s;
+  const fine = new Array(n).fill(false);
+  for (let i = 0; i < coarse.length; i++) if (coarse[i]) fine[i * s] = true;
+  if (s > 1) {
+    const k = coarse.reduce((sum, v) => sum + (v ? 1 : 0), 0);
+    const kFine = Math.max(1, Math.min(n, k * s));
+    const euclidFine = euclid(kFine, n);
+    for (let step = 0; step < n; step++) if (euclidFine[step]) fine[step] = true;
+  }
+  return fine;
+}
+
+// The one entry point for the reframed rhythm engine -- same returned
+// shape as patternsForRing ({n, s, coarse, fine, polyN, polyFine}) so
+// every existing consumer (velocityForStep, the breakdown/polymeter logic
+// in main.js's onPulse) works unchanged regardless of which function
+// built the pattern; only the SOURCE of `coarse`/`fine` changes. `polyN`/
+// `polyFine` are NOT yet reframed here -- real derived talea/color
+// isorhythm is a later phase's job (see the plan doc); this keeps the
+// SAME n+1-always-coprime construction patternsForRing already uses,
+// scaled off this pattern's own real onset count, so polymeter keeps
+// working exactly as before while coarse/fine become content-driven.
+export function patternsForMotif(motif, ring, subdivision = 1) {
+  const s = Math.max(1, Math.min(4, Math.round(subdivision)));
+  const coarse = applyRingLens(baseOnsetsForMotif(motif), ring);
+  const n = SPOKE_COUNT * s;
+  const fine = expandOnsets(coarse, s);
+  const k = coarse.reduce((sum, v) => sum + (v ? 1 : 0), 0);
+  const polyN = n + 1;
+  const kPoly = Math.max(1, Math.min(polyN, k * s));
+  return { n, s, coarse, fine, polyN, polyFine: euclid(kPoly, polyN) };
 }
 
 // Three velocity tiers, reusing existing numbers rather than inventing new
