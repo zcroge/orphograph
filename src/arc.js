@@ -10,16 +10,34 @@
 // MUSIC-STRUCTURE-PLAN.md already holds itself to for pitch/scale/voicing):
 //   phrase length (already drives the transposition-series clock's own
 //     period, main.js's seriesTotalMasterPulses)   -> the arc's PERIOD
-//   word count (W)                                  -> the arc's CEILING
+//   each word's OBSTRUENT SHARE (ringForLetter's own given/received
+//     census, already computed for a velocity gate at main.js:1081 and
+//     nowhere else) -> the arc's live INTENSITY, directly, per word
+//   word count (W)                                  -> `ceiling`, now the
+//     amount of DEVELOPMENT MATERIAL available (a later phase's job; see
+//     its own comment below) -- intensity no longer multiplies by it
 //   word-length SEQUENCE                            -> the arc's SHAPE
+//     (yati classification, still real, still unmultiplied by anything)
 //
-// "Shorter phrases -> sparser": W=1 gives ceiling=0 by construction, no
-// special case -- a single word IS the monastic pole, the brief's own
-// sentence falling directly out of the formula. The established
-// vocabulary for "a sequence of lengths as a shape" is Carnatic yati
-// (sama/srotovaha/gopuccha/mridanga/damaru/vishama) -- classifying a
-// phrase's own word-length sequence this way is an honest, real
-// classification, not an invented curve.
+// This replaces an earlier version that reduced a word to `word.length`
+// and min-max-normalized THAT across the phrase's own words -- which
+// pins the shortest word of every phrase to intensity 0 and the longest
+// to `ceiling` BY CONSTRUCTION, no matter what either word actually
+// contains. Two words with equal letter counts produced byte-identical
+// intensity; a phrase's own most obstruent, most "djent-shaped" word
+// could be assigned the LOWEST intensity in the phrase for the crime of
+// being short. Obstruent share is a real, per-word, unnormalized
+// phonetic signal -- it does not need every OTHER word in the phrase to
+// know how loud one word should be.
+//
+// "Shorter phrases -> sparser" still holds, now for an honest reason: a
+// short word is more likely to be dominated by its few sonorants (vowels
+// carry no obstruent weight), and W=1 still means zero material to
+// develop with (see `ceiling`'s own comment). The established vocabulary
+// for "a sequence of lengths as a shape" is Carnatic yati (sama/
+// srotovaha/gopuccha/mridanga/damaru/vishama) -- classifying a phrase's
+// own word-length sequence this way is an honest, real classification,
+// not an invented curve.
 //
 // Pure structure math, no Web Audio, no DOM -- sibling to src/voicing.js
 // and src/rhythm.js. Callers (main.js) read arc.ceiling/arc.yati for a
@@ -30,6 +48,7 @@
 // pick a row from ARC_STAGES.
 
 import { SPOKE_COUNT, PULSES_PER_BEAT } from "./wheel.js";
+import { ringForLetter } from "./letters.js";
 
 // SPOKE_COUNT / PULSES_PER_BEAT = 4 -- not a chosen number, the same
 // derived-identity pattern BREATH_CYCLE_PULSES (SPOKE_COUNT *
@@ -124,6 +143,33 @@ export function synthesizeYatiShape(name, W) {
   return seq;
 }
 
+// A word's phoneme-class census via letters.js's own ringForLetter --
+// the SAME classification main.js:1081 already computes per letter-hit
+// for a velocity gate, just tallied across a whole word instead of read
+// one letter at a time. `unsettled` (ringForLetter returns undefined --
+// "sounds on every ring", letters.js:219-223) is tracked but does not
+// enter `weight`: it is neither an obstruent nor a sonorant statement.
+function censusForWord(word) {
+  const census = { given: 0, received: 0, made: 0, unsettled: 0 };
+  for (const entry of word) {
+    const tier = ringForLetter(entry.letter);
+    if (tier === "given" || tier === "received" || tier === "made") census[tier] += 1;
+    else census.unsettled += 1;
+  }
+  return census;
+}
+
+// Obstruent share, 0..1 -- the given+received census over the word's own
+// length. A word of pure sonorants (vowels, nasals, liquids, glides)
+// scores 0; a word of pure voiceless/voiced obstruents (stops, fricatives)
+// scores 1. This is the phonetic signal that used to do exactly one job
+// (a velocity gate, main.js:1081) and otherwise vanished after spoke
+// assignment -- re-entering it here is what makes the arc's intensity a
+// property of THIS word, not a rank among its neighbors.
+function weightForCensus(census, wordLength) {
+  return wordLength > 0 ? (census.given + census.received) / wordLength : 0;
+}
+
 // The one entry point for deriving an arc from a phrase's own words.
 // `words` is the woven trace's own word list (main.js's currentWords,
 // splitIntoWords(trace) -- see trace.js) -- the WOVEN trace deliberately,
@@ -133,14 +179,22 @@ export function synthesizeYatiShape(name, W) {
 export function deriveArc({ words }) {
   const W = words.length;
   const lengths = words.map((w) => w.length);
+  const censuses = words.map(censusForWord);
+  const weights = censuses.map((c, i) => weightForCensus(c, lengths[i]));
   const Lmin = W ? Math.min(...lengths) : 0;
   const Lmax = W ? Math.max(...lengths) : 0;
-  // W=1 -> ceiling=0 by construction -- "a single word is more apt to
-  // produce a sparser composition" falls directly out of this, no special
-  // case. SPOKE_COUNT-1 as the divisor: 12 words is one word per spoke,
-  // the point at which the phrase saturates the wheel.
+  // `ceiling` no longer multiplies intensity (see arcIntensityAt) -- a
+  // word's own obstruent share IS its intensity, full stop, regardless of
+  // how many other words share the phrase. What W actually measures is
+  // how much MATERIAL there is to develop a form out of (relations
+  // between consecutive words, a later phase's job) -- a one-word phrase
+  // has zero word-to-word relations to develop by, which is the honest
+  // version of "a single word is more apt to produce a sparser
+  // composition," not a manufactured intensity cap. SPOKE_COUNT-1 as the
+  // divisor: 12 words is one word per spoke, the point at which the
+  // phrase saturates the wheel.
   const ceiling = W <= 1 ? 0 : Math.min(1, (W - 1) / (SPOKE_COUNT - 1));
-  return { W, lengths, Lmin, Lmax, ceiling, yati: classifyYati(lengths) };
+  return { W, lengths, censuses, weights, Lmin, Lmax, ceiling, yati: classifyYati(lengths) };
 }
 
 // The arc's live intensity at progress `p` (0..1) through the current
@@ -155,18 +209,21 @@ export function deriveArc({ words }) {
 // restarts, the same "a real, periodic conjunction within continuous
 // motion" philosophy this engine already states for grand convergence.
 //
-// `overrideShapeName` (one of synthesizeYatiShape's names, or null for the
-// real derived shape) lets a manual "arc-shape" selection replace the
-// SHAPE only -- the ceiling and period stay real either way.
+// Intensity IS the current word's own obstruent share -- no normalization
+// against the phrase's other words, no ceiling multiply. `overrideShapeName`
+// (one of synthesizeYatiShape's names, or null for the real derived
+// weights) replaces the WEIGHT SEQUENCE with a synthetic 0..1 shape, for
+// when the owner wants a deterministic dynamic curve instead of the
+// phrase's own phonetics -- still returned directly, still unmultiplied.
 export function arcIntensityAt(arc, p, overrideShapeName = null) {
   if (arc.W === 0) return 0;
   const wrapped = ((p % 1) + 1) % 1; // defensive -- p should already be in [0,1) but never trust a caller's clock past a phase boundary
-  const lengths = overrideShapeName ? synthesizeYatiShape(overrideShapeName, arc.W) : arc.lengths;
-  const lo = overrideShapeName ? Math.min(...lengths) : arc.Lmin;
-  const hi = overrideShapeName ? Math.max(...lengths) : arc.Lmax;
   const i = Math.min(arc.W - 1, Math.floor(wrapped * arc.W));
-  const shape = hi === lo ? 1 : (lengths[i] - lo) / (hi - lo);
-  return arc.ceiling * shape;
+  if (!overrideShapeName) return arc.weights[i];
+  const synth = synthesizeYatiShape(overrideShapeName, arc.W);
+  const lo = Math.min(...synth);
+  const hi = Math.max(...synth);
+  return hi === lo ? 1 : (synth[i] - lo) / (hi - lo);
 }
 
 export function stageForIntensity(I) {
@@ -178,5 +235,5 @@ export function stageForIntensity(I) {
 // whistleScaleInput.value = derived.join(", ")).
 export function describeArc(arc, I) {
   const stage = stageForIntensity(I);
-  return `W=${arc.W} · ceiling ${arc.ceiling.toFixed(2)} · shape ${arc.yati} · I=${I.toFixed(2)} · stage ${stage} (${ARC_STAGES[stage].name})`;
+  return `W=${arc.W} · weight I=${I.toFixed(2)} · shape ${arc.yati} · ceiling ${arc.ceiling.toFixed(2)} · stage ${stage} (${ARC_STAGES[stage].name})`;
 }
