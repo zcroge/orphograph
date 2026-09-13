@@ -171,8 +171,11 @@ export function masterPulsesPerSecondToBpm(pulsesPerSecond) {
 // simultaneously at the LCM of their own three lap lengths -- computed
 // directly from RING_SPEED_WEIGHT here (not hand-verified and hardcoded),
 // so this stays correct if the 6:8:12 ratio itself is ever revisited.
-function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
-function lcm(a, b) { return (a / gcd(a, b)) * b; }
+// Exported (were module-private) -- the motif engine's own isorhythm/
+// polymeter math (src/motif.js) needs the exact same gcd/lcm this file
+// already uses for grand convergence, not a second reimplementation.
+export function gcd(a, b) { return b === 0 ? a : gcd(b, a % b); }
+export function lcm(a, b) { return (a / gcd(a, b)) * b; }
 const RING_LAP_LENGTHS = Object.values(RING_SPEED_WEIGHT).map((w) => (SPOKE_COUNT * MAX_RING_WEIGHT) / w);
 export const GRAND_CONVERGENCE_PULSES = RING_LAP_LENGTHS.reduce(lcm);
 

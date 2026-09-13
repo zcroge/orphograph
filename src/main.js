@@ -13,6 +13,7 @@ import { CompactLegend } from "./compactLegend.js";
 import { pixelGlyphSVGMarkup } from "./glyphRender.js";
 import { patternsForRing, velocityForStep, GHOST_VELOCITY } from "./rhythm.js";
 import { deriveArc, arcIntensityAt, stageForIntensity, subdivisionForStage, tierEmphasisForStage, describeArc, ARC_STAGES, ARC_STAGE_COUNT } from "./arc.js";
+import { deriveMotifs } from "./motif.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -384,6 +385,17 @@ let currentWords = [];
 // native chord-voicing engine (synth.js's meanderFlute) can retune once
 // per WORD boundary instead of once per letter -- see lastFluteWordByRing.
 let wordOfEntry = new Map();
+// The motif engine's own per-word derived objects (src/motif.js) -- built
+// alongside currentWords/wordOfEntry, same lifetime, same reasoning.
+// `motifOfEntry` mirrors wordOfEntry exactly (object identity -> the
+// motif, not just the word, that entry belongs to). `currentMotifByRing`
+// is the one genuinely new piece of live state this phase adds: which
+// motif each ring is CURRENTLY inside, written exclusively by the
+// Sequencer's own onWordChange callback below -- "one owner at a time,"
+// the same discipline this file's other discrete dials already follow.
+let currentMotifs = [];
+let motifOfEntry = new Map();
+const currentMotifByRing = { given: null, received: null, made: null };
 // Per ring: the last word (object identity into currentWords) this ring's
 // own flute retune already fired for -- melody mode's onNoteHit fires
 // once per AUDIBLE letter, but the flute should only retune once per real
@@ -1360,6 +1372,18 @@ const sequencer = new Sequencer({
     // pass.
     view.pulsePhaseBarReversal(ring);
   },
+  // The motif engine's own missing signal (src/motif.js/src/sequencer.js):
+  // "which word is THIS ring currently inside." Only real per-ring state
+  // update here -- currentMotifByRing is read live elsewhere (the arc's
+  // own intensity, rhythm.js's future patternsForMotif), never cached
+  // beyond this one write, same "read live state, don't cache" discipline
+  // as everything else in this file. `wordIndex` indexes `currentMotifs`
+  // directly: splitIntoWords is a pure function of the shared trace, so
+  // this ring's own word list and main.js's currentWords always agree on
+  // what "word index i" means, without the two coordinating directly.
+  onWordChange: (ring, wordIndex) => {
+    currentMotifByRing[ring] = currentMotifs[wordIndex] || null;
+  },
 });
 
 // The four orrery dials -- see makeDial's own comment above. "The rings
@@ -1424,15 +1448,36 @@ let lastArcStage = -1;
 
 // The arc's own live intensity, read fresh every frame (main.js's own
 // established "read live state, don't cache" convention). Following
-// input: reads the ALREADY-COMPUTED transposition-series clock's own
-// progress (see recomputeSeriesTotalPulses/checkSeriesClosed's own
-// comments for why this clock, not a new one) through arcIntensityAt.
+// input, real case: reads the GIVEN ring's own CURRENT motif directly
+// (currentMotifByRing, written by the Sequencer's onWordChange) -- the
+// given ring owns the global stage because it's the slowest, the ground,
+// and already the ring the guitar follows by default (guitarFollowsRing).
+// This replaces indexing into the phrase's word list by the transposition
+// -series clock's own progress fraction (floor(p*W)) -- an indirect proxy
+// for "which word is sounding" -- with the real, event-driven answer: the
+// stage now changes at the exact moment the given ring actually enters a
+// new word, not at an approximated fraction of an unrelated clock. Before
+// the given ring's lead-in finishes and it enters its first word,
+// currentMotifByRing.given is still null -- reads as 0 (monastic), a
+// reasonable "nothing derived yet" default, same spirit as every other
+// freshly-reset-at-Play state.
+//
+// Following input, override case: `arcShapeOverride` replaces the WEIGHT
+// signal with a synthetic, deterministic 0..1 curve (see arc.js's own
+// synthesizeYatiShape) for when the owner wants a chosen dynamic shape
+// instead of the phrase's own phonetics -- that still needs the
+// transposition-series clock's own progress to index into, since a
+// synthetic curve has no "current ring position" to read.
+//
 // Not following: the manual slider drives it directly, same relationship
 // the manual scale field has to `scale-follows-input`.
 function currentArcIntensity() {
   if (arcFollowsInput) {
-    const p = seriesTotalMasterPulses > 0 ? (sequencer.masterPulseCount - seriesStartPulse) / seriesTotalMasterPulses : 0;
-    return arcIntensityAt(currentArc, p, arcShapeOverride);
+    if (arcShapeOverride) {
+      const p = seriesTotalMasterPulses > 0 ? (sequencer.masterPulseCount - seriesStartPulse) / seriesTotalMasterPulses : 0;
+      return arcIntensityAt(currentArc, p, arcShapeOverride);
+    }
+    return currentMotifByRing.given ? currentMotifByRing.given.weight : 0;
   }
   return parseFloat($("arc-intensity").value);
 }
@@ -1684,6 +1729,16 @@ $("play").addEventListener("click", () => {
     currentWords = splitIntoWords(trace);
     wordOfEntry = new Map();
     for (const w of currentWords) for (const e of w) wordOfEntry.set(e, w);
+    // The motif engine's own per-word objects -- built once here, same
+    // "a fresh phrase means fresh derived state" reasoning as currentArc
+    // just below. currentMotifByRing resets to null/null/null: no ring
+    // has entered a word yet (lead-in hasn't even finished), the same
+    // honest "nothing derived yet" state Play already leaves lastArcStage
+    // and lastFluteWordByRing in.
+    currentMotifs = deriveMotifs(currentWords);
+    motifOfEntry = new Map();
+    for (let wi = 0; wi < currentWords.length; wi++) for (const e of currentWords[wi]) motifOfEntry.set(e, currentMotifs[wi]);
+    currentMotifByRing.given = currentMotifByRing.received = currentMotifByRing.made = null;
     lastFluteWordByRing.given = lastFluteWordByRing.received = lastFluteWordByRing.made = null;
     hullCursor.given = hullCursor.received = hullCursor.made = null;
     // The marquee's own "one revolution" clock -- a fresh phrase means a

@@ -12,7 +12,13 @@
 // returned {spoke, octaveOffset} voices into Hz/ratios against whatever
 // root frequency and ring register multiplier are live at call time.
 
-import { SPOKE_COUNT, normalizeSpoke, mirrorSpoke, rotateSpoke } from "./wheel.js";
+import { SPOKE_COUNT, normalizeSpoke } from "./wheel.js";
+// Moved to motif.js (the motif engine's own home for wheel-operator
+// relations) -- re-imported here unchanged so voiceWord's rule 6 stays
+// byte-for-byte identical to before the move. See motif.js's own comment
+// on findSetTransform for why this stays separate from that module's
+// newer, generalized `relate`.
+import { findSetTransform } from "./motif.js";
 
 // 12 spokes / 6 (the Timaeus proportion's own smallest member) -- not a
 // freehand pick. See rule 2 in the plan.
@@ -77,26 +83,6 @@ function voiceFresh(wordSpokes, rootSpoke, arcSpokesPerOctave, maxVoices) {
     }
   }
   return voices.slice(0, maxVoices);
-}
-
-// Rule 6: is `nextPcs` reachable from `prevPcs` (as SETS) by one shared
-// mirror or rotation? Checked identity/rotations before mirror -- an exact
-// repeat (rotate by 0) is the simplest, most common case. Reuses the
-// EXISTING wheel.js operators, not a reimplementation of them.
-function findSetTransform(prevPcs, nextPcs) {
-  if (!prevPcs || !nextPcs || prevPcs.length === 0 || prevPcs.length !== nextPcs.length) return null;
-  const nextSet = new Set(nextPcs.map(normalizeSpoke));
-  const matches = (apply) => {
-    const transformed = new Set(prevPcs.map((s) => normalizeSpoke(apply(s))));
-    if (transformed.size !== nextSet.size) return false;
-    for (const s of nextSet) if (!transformed.has(s)) return false;
-    return true;
-  };
-  for (let n = 0; n < SPOKE_COUNT; n++) {
-    if (matches((s) => rotateSpoke(s, n))) return { type: "rotate", n, apply: (s) => rotateSpoke(s, n) };
-  }
-  if (matches(mirrorSpoke)) return { type: "mirror", apply: mirrorSpoke };
-  return null;
 }
 
 // The one entry point. `wordSpokes` is the word's own letters' spokes, IN

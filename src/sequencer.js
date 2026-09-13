@@ -47,7 +47,7 @@ export const Phase = Object.freeze({
 const RING_NAMES = ["given", "received", "made"];
 
 class RingRunner {
-  constructor(ringName, { onPulse, onNoteHit, onChordHit, onPhaseChange, onOrigin, onTraceLoop, onDirectionReversal }) {
+  constructor(ringName, { onPulse, onNoteHit, onChordHit, onPhaseChange, onOrigin, onTraceLoop, onDirectionReversal, onWordChange }) {
     this.ring = ringName;
     this.speedMultiplier = ringSpeedMultiplier(ringName);
     this.onPulse = onPulse;
@@ -66,6 +66,15 @@ class RingRunner {
     // "this ring's own direction just actually changed" either -- fired
     // only on a genuine flip (see _advanceMelody), not every recomputation.
     this.onDirectionReversal = onDirectionReversal || (() => {});
+    // The motif engine's own missing signal (see src/motif.js): "which
+    // word is this ring CURRENTLY inside." Chord mode already knew this
+    // (one word struck at a time, this.wordIndex); melody mode never
+    // tracked it at all -- a hit only ever knew its own letter, and the
+    // only place that needed "which word" (_directionToward's tie-break,
+    // below) recomputed it with an O(words * lettersPerWord) scan, every
+    // tie. Fired on a genuine word-boundary crossing only (see
+    // _advanceMelody/_strikeWord), not every pulse.
+    this.onWordChange = onWordChange || (() => {});
 
     this.mode = "melody"; // or "chord" -- see setMode
     this.phase = Phase.IDLE;
@@ -73,7 +82,9 @@ class RingRunner {
     this.trace = [];
     this.traceIndex = 0;
     this.words = [];
+    this.wordIndexOfEntry = new Map();
     this.wordIndex = 0;
+    this.currentWordIndex = -1; // -1 == no word entered yet (still in lead-in)
     this.pulsesSinceLastWord = 0;
     this.currentWordPulseLength = MIN_CHORD_PULSES;
     this.leadInPulsesRemaining = 0;
@@ -91,7 +102,17 @@ class RingRunner {
     this.traceIndex = 0;
     this.words = splitIntoWords(trace);
     this.wordHandednessOf = new Map(this.words.map((w) => [w, wordHandedness(w)]));
+    // Entry -> word-index reverse lookup, built once here -- same "one
+    // real home, computed once" discipline main.js's own wordOfEntry
+    // already follows (main.js:386), just scoped to this ring's own words
+    // (splitIntoWords is a pure, deterministic function of the shared
+    // trace, so every ring's own word list has identical boundaries and
+    // therefore identical indices -- this map and main.js's currentMotifs
+    // agree on what "word index i" means without coordinating directly).
+    this.wordIndexOfEntry = new Map();
+    this.words.forEach((w, wi) => w.forEach((entry) => this.wordIndexOfEntry.set(entry, wi)));
     this.wordIndex = 0;
+    this.currentWordIndex = -1;
     this.pulsesSinceLastWord = 0;
     this.currentSpoke = 1;
     this.direction = 1;
@@ -118,7 +139,11 @@ class RingRunner {
     if (cw < ccw) return 1;
     if (ccw < cw) return -1;
     const entry = this.trace[this.traceIndex];
-    const word = entry && !entry.isRest ? this.words.find((w) => w.includes(entry)) : null;
+    // O(1) map lookup, not the O(words * lettersPerWord) `.find` scan this
+    // used to do on every exact-tie tick -- see wordIndexOfEntry's own
+    // comment in start().
+    const wordIndex = entry && !entry.isRest ? this.wordIndexOfEntry.get(entry) : undefined;
+    const word = wordIndex !== undefined ? this.words[wordIndex] : null;
     return word ? this.wordHandednessOf.get(word) : this.direction;
   }
 
@@ -167,6 +192,17 @@ class RingRunner {
     const target = this.trace[this.traceIndex];
     if (target && this.currentSpoke === target.spoke) {
       this.onNoteHit(this.ring, target, this.traceIndex);
+      // A real word-boundary crossing -- fired the moment this ring's own
+      // sweep actually reaches a letter belonging to a NEW word, not on
+      // every hit (a multi-letter word fires this once, on its first
+      // letter). Rests carry no word index and never trigger it.
+      if (!target.isRest) {
+        const wi = this.wordIndexOfEntry.get(target);
+        if (wi !== undefined && wi !== this.currentWordIndex) {
+          this.currentWordIndex = wi;
+          this.onWordChange(this.ring, wi, this.words[wi]);
+        }
+      }
       this.traceIndex = (this.traceIndex + 1) % this.trace.length; // wrap, don't stop
       if (this.traceIndex === 0) this.onTraceLoop(this.ring);
       // Direction is chosen ONCE here, right as the new target is
@@ -193,6 +229,11 @@ class RingRunner {
     if (this.words.length === 0) return;
     const word = this.words[index];
     const pulseLength = chordPulseLength(word);
+    // Chord mode always enters a genuinely new word at every strike (one
+    // word sounds at a time, in sequence) -- unconditional, unlike melody
+    // mode's own change-detection above.
+    this.currentWordIndex = index;
+    this.onWordChange(this.ring, index, word);
     this.onChordHit(this.ring, word, index, pulseLength);
     this.wordIndex = (index + 1) % this.words.length; // wrap, don't stop
     if (this.wordIndex === 0) this.onTraceLoop(this.ring);
@@ -208,7 +249,7 @@ class RingRunner {
 }
 
 export class Sequencer {
-  constructor({ onPulse, onNoteHit, onChordHit, onPhaseChange, onOrigin, onGrandConvergence, onTraceLoop, onBreathCycle, onDirectionReversal }) {
+  constructor({ onPulse, onNoteHit, onChordHit, onPhaseChange, onOrigin, onGrandConvergence, onTraceLoop, onBreathCycle, onDirectionReversal, onWordChange }) {
     const cb = {
       onPulse: onPulse || (() => {}),
       onNoteHit: onNoteHit || (() => {}),
@@ -217,6 +258,7 @@ export class Sequencer {
       onOrigin: onOrigin || (() => {}),
       onTraceLoop: onTraceLoop || (() => {}),
       onDirectionReversal: onDirectionReversal || (() => {}),
+      onWordChange: onWordChange || (() => {}),
     };
     this.rings = Object.fromEntries(RING_NAMES.map((r) => [r, new RingRunner(r, cb)]));
     this.onGrandConvergence = onGrandConvergence || (() => {});
@@ -249,6 +291,19 @@ export class Sequencer {
     this._running = true;
     this._lastTick = performance.now();
     this._wasAtOrigin = true;
+    // Bug found while wiring the motif engine's own tihai (a future phase
+    // schedules an event to land exactly on grand convergence, which
+    // requires predicting masterPulseCount from a known Play-time
+    // baseline): this counter was initialized once in the constructor and
+    // NEVER reset here, while every ring's own phase/spoke/traceIndex IS
+    // reset on every Play (see each RingRunner's own start() above). So
+    // on any Play after the first, `masterPulseCount mod 72` no longer
+    // predicts convergence at all -- harmless today (grand convergence is
+    // edge-OBSERVED, sequencer.js:310-319, never scheduled against), but
+    // it would make a scheduled prediction silently wrong. Resetting here
+    // costs nothing now and is a real precondition for later.
+    this._masterPulseAccumulator = 0;
+    this._masterPulseCount = 0;
     RING_NAMES.forEach((r) => this.rings[r].start(trace));
     this._loop();
   }
