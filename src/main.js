@@ -683,6 +683,24 @@ function currentSubdivision() {
   return subdivisionForStage(Math.max(0, lastArcStage));
 }
 
+// "Surfaced in the readout, or it reads as silent failure" -- a derived
+// talea that happens to be a multiple of SPOKE_COUNT genuinely never
+// phases against the fixed bar (disorientationDepth = SPOKE_COUNT, the
+// old n+1 trick's own guaranteed-always-1 property traded away for real
+// input-dependence, see rhythm.js's own patternsForMotif header). Updated
+// only on a real given-ring word change (onWordChange above), not every
+// frame -- the talea can only change when the word it's derived from
+// does.
+function updateIsorhythmReadout() {
+  const el = $("isorhythm-readout");
+  if (!el) return;
+  const motif = currentMotifByRing.given;
+  if (!motif) { el.textContent = ""; return; }
+  const p = patternsForMotif(motif, "given", currentSubdivision());
+  const phasing = p.disorientationDepth === 1 ? "maximal phasing" : p.disorientationDepth === SPOKE_COUNT ? "never phases (talea locked to the bar)" : `disorientation depth ${p.disorientationDepth}`;
+  el.textContent = `talea ${p.talea} pulses · realigns every ${p.realignmentBars} bar${p.realignmentBars === 1 ? "" : "s"} · ${phasing}`;
+}
+
 // Which ring's own Euclidean pattern the guitar chugs on -- "kick-and-chug
 // locked together is genre-defining," so this defaults to `given` (the
 // kick's own ring), matching the pattern engine's own kick/snare/hat role
@@ -1417,6 +1435,11 @@ const sequencer = new Sequencer({
   // what "word index i" means, without the two coordinating directly.
   onWordChange: (ring, wordIndex) => {
     currentMotifByRing[ring] = currentMotifs[wordIndex] || null;
+    // The isorhythm readout tracks the GIVEN ring specifically -- it's
+    // the only ring that ever phases (see the invariant-layer rule,
+    // rhythm.js's own patternsForMotif header), so it's the only one
+    // whose talea/realignment figures mean anything to state.
+    if (ring === "given") updateIsorhythmReadout();
   },
 });
 
@@ -1773,6 +1796,7 @@ $("play").addEventListener("click", () => {
     motifOfEntry = new Map();
     for (let wi = 0; wi < currentWords.length; wi++) for (const e of currentWords[wi]) motifOfEntry.set(e, currentMotifs[wi]);
     currentMotifByRing.given = currentMotifByRing.received = currentMotifByRing.made = null;
+    updateIsorhythmReadout();
     lastFluteWordByRing.given = lastFluteWordByRing.received = lastFluteWordByRing.made = null;
     hullCursor.given = hullCursor.received = hullCursor.made = null;
     // The marquee's own "one revolution" clock -- a fresh phrase means a

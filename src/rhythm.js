@@ -17,9 +17,10 @@
 // (same "pure spoke-domain math" shape). Callers (main.js's onPulse
 // scheduler) turn a returned pattern into real playPercussionHit calls.
 
-import { SPOKE_COUNT, normalizeSpoke, rotateSpoke, mirrorSpoke, PULSES_PER_BEAT } from "./wheel.js";
+import { SPOKE_COUNT, normalizeSpoke, rotateSpoke, mirrorSpoke, gcd, lcm, PULSES_PER_BEAT } from "./wheel.js";
 import { ringForLetter } from "./letters.js";
 import { ROTATION_SPOKE_SHIFT } from "./transform.js";
+import { chordPulseLength } from "./trace.js";
 
 // Reuses the exact number main.js's existing "roll" pattern mode already
 // uses for its own first grace-note flam -- a ghost-tier onset here is the
@@ -225,24 +226,68 @@ function expandOnsets(coarse, s) {
 }
 
 // The one entry point for the reframed rhythm engine -- same returned
-// shape as patternsForRing ({n, s, coarse, fine, polyN, polyFine}) so
-// every existing consumer (velocityForStep, the breakdown/polymeter logic
-// in main.js's onPulse) works unchanged regardless of which function
-// built the pattern; only the SOURCE of `coarse`/`fine` changes. `polyN`/
-// `polyFine` are NOT yet reframed here -- real derived talea/color
-// isorhythm is a later phase's job (see the plan doc); this keeps the
-// SAME n+1-always-coprime construction patternsForRing already uses,
-// scaled off this pattern's own real onset count, so polymeter keeps
-// working exactly as before while coarse/fine become content-driven.
+// shape as patternsForRing ({n, s, coarse, fine, polyN, polyFine}) plus
+// two new isorhythmic readout fields (disorientationDepth,
+// realignmentBars), so every existing consumer (velocityForStep, the
+// breakdown/polymeter logic in main.js's onPulse) works unchanged
+// regardless of which function built the pattern; only the SOURCE of
+// `coarse`/`fine`/`polyN`/`polyFine` changes.
+//
+// Real isorhythm, not the old "n+1, always coprime by construction"
+// trick: a genuine medieval-motet TALEA (a repeating rhythmic cell,
+// independent of the melodic content riding on it) needs its own
+// length, and this word already has one -- `chordPulseLength` (trace.js,
+// `max(MIN_CHORD_PULSES, wordArc(word))`), the SAME duration the chord/
+// arpeggio ring-performance modes already use for this exact word's own
+// sounding length. `motif.entries` IS the original word (the same trace
+// entries splitIntoWords returned, never cloned -- see motif.js's own
+// comment), so `chordPulseLength(motif.entries)` is real, not invented.
+// The COLOR (the melodic cycle riding on top of the talea) is the
+// motif's own `spokes.length` -- already how the guitar riff indexes
+// into the motif (main.js's own accentIndex). Talea and color are
+// independent by construction (one measures the word's own ARC, the
+// other its own LETTER COUNT), so they only recombine identically once
+// every `lcm(talea, color)` -- literally Vitry's ars nova device,
+// derived from the word instead of chosen.
+//
+// `disorientationDepth = gcd(L, SPOKE_COUNT)` -- how much the talea
+// shares with the fixed 12-pulse bar; 1 means maximal phasing (the old
+// `n+1` trick's own guarantee), 12 means the talea is itself a multiple
+// of the bar and NEVER phases at all (a real, honest possible outcome
+// now that L is derived rather than chosen -- see this function's own
+// realignmentBars). `realignmentBars = lcm(L, SPOKE_COUNT) / SPOKE_COUNT`
+// -- how many bars of the fixed grid the talea takes to return to phase
+// zero; the readout states this so a non-phasing word (L a multiple of
+// 12) reads as a real, derived outcome, not as the feature silently
+// failing.
 export function patternsForMotif(motif, ring, subdivision = 1) {
   const s = Math.max(1, Math.min(4, Math.round(subdivision)));
   const coarse = applyRingLens(baseOnsetsForMotif(motif), ring);
   const n = SPOKE_COUNT * s;
   const fine = expandOnsets(coarse, s);
   const k = coarse.reduce((sum, v) => sum + (v ? 1 : 0), 0);
-  const polyN = n + 1;
+
+  const talea = chordPulseLength(motif.entries);
+  const color = Math.max(1, motif.spokes.length);
+  const polyN = talea * s; // fine-step-scaled, same resolution `n` is built at
   const kPoly = Math.max(1, Math.min(polyN, k * s));
-  return { n, s, coarse, fine, polyN, polyFine: euclid(kPoly, polyN) };
+
+  return {
+    n, s, coarse, fine,
+    polyN,
+    polyFine: euclid(kPoly, polyN),
+    talea,
+    color,
+    disorientationDepth: gcd(talea, SPOKE_COUNT),
+    realignmentBars: lcm(talea, SPOKE_COUNT) / SPOKE_COUNT,
+    // The classic isorhythmic statistic (Vitry's own talea/color split):
+    // how many TALEA STATEMENTS pass before the melodic color cycle also
+    // returns to its own start -- 1 means color and talea are already
+    // the same length (they realign every single statement); otherwise a
+    // real, derived "the riff's pitch content only fully repeats every
+    // N bar-cycles of its own rhythm" figure.
+    colorRepeatsEveryTaleaStatements: lcm(talea, color) / talea,
+  };
 }
 
 // Three velocity tiers, reusing existing numbers rather than inventing new
