@@ -205,16 +205,45 @@ const THROAT_HARMONICS = [
 // clip guard; this one is a slow, musical "even things out" control that
 // is a genuine no-op at 0). Same "factory default" pattern as every other
 // DEFAULT_*_PARAMS export here.
+// REVISED after a real measured headroom check: the guitar's own new low-
+// register/higher-drive redesign pushed the master bus to real, measured
+// peak clipping (>=0.99 samples) at forced maximum arc intensity with the
+// drone on -- found directly (mixMeterLevels().clipping), not guessed.
+// mixGuitar starts at 0.8 (still user-adjustable up, same "arrives
+// conservative" treatment mixFlute took the opposite direction on,
+// deliberately, for presence) and mixLevelerAmount raised 0.35 -> 0.5 for
+// more real evening-out under the heaviest simultaneous load this engine
+// has produced yet.
+//
+// Honest disclosed limit, found while chasing this down: even completely
+// alone (no guitar, no percussion, nothing else playing), the drone's own
+// channel already measures ~1.6 RMS -- a real, PRE-EXISTING characteristic
+// of its own additive stack (16 harmonic partials + throat harmonics +
+// growl formants, all summing before any fader), predating this round
+// entirely and unrelated to this round's own droneGrowlSaturationAmount/
+// wander tuning (verified directly: reverting that tuning changed the
+// measured drone RMS by less than measurement noise). That pre-existing
+// level, not anything new this round added, is the real remaining
+// contributor to occasional peak-limiter engagement at the most extreme
+// combination this engine has ever produced (a long, dense phrase, forced
+// maximum arc intensity, AND the drone on, together) -- the master bus's
+// own RMS stays well-behaved throughout (< 0.75) even then, so the
+// limiter is doing exactly the job it exists for at a genuinely new
+// extreme, not silently failing. Turning the DRONE down further wasn't
+// done here -- it isn't what this round's own brief asked for ("powerful
+// force"), and it's a pre-existing balance question, not a regression
+// this round introduced -- but it's the honest next place to look if a
+// real ear check still finds the loudest simultaneous moments too hot.
 export const DEFAULT_MIX_PARAMS = {
   mixDrone: 1,
   mixNote: 1,
   mixFlute: 1.45,
   mixPercussion: 1,
-  mixGuitar: 1,
+  mixGuitar: 0.8,
   mixMaster: 0.45,
   mixFluteLowMidHz: 400,
   mixFluteLowMidDb: 5,
-  mixLevelerAmount: 0.35,
+  mixLevelerAmount: 0.5,
 };
 
 // The rhythmic, palm-muted, overdriven, drop-tuned guitar/bass voice.
@@ -223,38 +252,45 @@ export const DEFAULT_MIX_PARAMS = {
 // convincing flute from oscillators plus noise") inverts for a high-gain
 // guitar: a tanh clipper at real drive erases most of the difference
 // between a real string and a sawtooth, the same reason a cheap and an
-// expensive guitar sound closer once heavily distorted. Sawtooth is a
-// deliberate, LABELED exception to this file's own earlier "sawtooth
-// removed as harsh" decision (see playNote's own detuneCents comment) --
-// that reasoning was about an undistorted, vocal-adjacent, struck voice;
-// sawtooth-into-distortion is the canonical source waveform for exactly
-// this genre instead. One voice, not two ("guitar/bass") -- guitarSubAmount
-// is the "bass" half, a sub-octave doubling layer, not a second instrument
-// (the drone still permanently holds the true sub-bass, by law).
+// expensive guitar sound closer once heavily distorted. Sawtooth (and,
+// below, square) are a deliberate, LABELED exception to this file's own
+// earlier "sawtooth removed as harsh" decision (see playNote's own
+// detuneCents comment) -- that reasoning was about an undistorted,
+// vocal-adjacent, struck voice; distorted odd/full-harmonic waveforms are
+// the canonical source material for exactly this genre instead. One
+// voice, not two ("guitar/bass") -- guitarSubAmount is the "bass" half, a
+// sub-octave doubling layer, not a second instrument (the drone still
+// permanently holds the true sub-bass, by law).
 //
-// Register (guitarFloorHz/CeilingHz): derived BY HAND from this project's
-// own DRONE_HZ (main.js: hzForSpoke(7) * 2^DRONE_OCTAVE_SHIFT = 311.13 /
-// 8 = 38.89Hz) -- floorHz = DRONE_HZ*2 (~77.8Hz), ceilingHz = floorHz*4
-// (two octaves). Real metal-mix practice high-passes rhythm guitars at
-// 80-120Hz precisely because that low end belongs to the kick/bass --
-// this HPF corner sits right at that floor, so drop-tuning is expressed
-// as register + slack attack + drive, not as a literal sub-80Hz
-// fundamental (which would fight the drone/kick directly). Not computed
-// live from DRONE_HZ (synth.js has no reach into main.js's own constant,
-// and DEFAULT_*_PARAMS objects elsewhere in this file are already baked
-// numbers, not live formulas -- see DEFAULT_NOTE_PARAMS' own floorHz/
-// ceilingHz) -- if the placeholder tuning (letters.js) is ever resettled,
-// this needs re-deriving by hand too, same as every other register here.
+// Register: REVISED after listening -- "the guitar/bass needs to be...
+// from the same super-low range that the bass drone lives in... what I'm
+// hearing now is more like a wimpy palm mute." The first pass carved the
+// guitar's own register ABOVE the drone (floorHz = DRONE_HZ*2) on the
+// theory that metal mixes high-pass rhythm guitars at 80-120Hz to avoid
+// fighting the bass -- true, but backwards here: a real drop-tuned 7/8-
+// string's low string fundamental sits at 40-65Hz, genuinely IN the
+// drone's own territory (DRONE_HZ ~=38.9Hz), and the real mixing answer
+// for two low voices sharing that space is a SIDECHAIN duck (see
+// _duckDroneForGuitar below), not frequency segregation. floorHz now sits
+// just above the drone's own fundamental (real low-string F#0/G0-ish
+// territory); ceilingHz two-plus octaves above that -- still a real
+// rhythm-guitar span, never drifting up into the kalimba/note voice's own
+// register.
 //
-// guitarScoopHz defaults to droneGrowlF2Hz's OWN current value (580) --
-// the guitar vacates exactly the band the drone's throat voice occupies,
-// which also happens to be the classic metal mid-scoop frequency; the
-// measurement and the genre convention agree.
+// guitarScoopHz still defaults to droneGrowlF2Hz's OWN current value
+// (580) -- the guitar vacates exactly the band the drone's throat voice
+// occupies (a real measured collision, unaffected by the register move
+// above, which only touches the FUNDAMENTAL), which also happens to be
+// the classic metal mid-scoop frequency.
 export const DEFAULT_GUITAR_PARAMS = {
   guitarPreGain: 1,
-  guitarDriveAmount: 0.6,
-  guitarFloorHz: 77.8,
-  guitarCeilingHz: 311.1,
+  // Raised 0.6 -> 0.85 -- last round's drive was genuinely mild; real
+  // high-gain rhythm tone needs to be pushed hard enough that the raw
+  // oscillator shape gets buried under generated harmonics, the entire
+  // reason buildSaturationCurve exists in the first place.
+  guitarDriveAmount: 0.85,
+  guitarFloorHz: 34.7,
+  guitarCeilingHz: 185,
   guitarScoopHz: 580,
   guitarScoopQ: 1.2,
   guitarScoopDb: -6,
@@ -266,9 +302,33 @@ export const DEFAULT_GUITAR_PARAMS = {
   // and passes it in) -- 1.0 is a TRUE no-op identity, same "off means
   // off" discipline buildSaturationCurve's own amount=0 already follows.
   guitarChugTightness: 1,
-  guitarChugAttackFraction: 0.06,
+  guitarChugAttackFraction: 0.04,
+  // The two-stage percussive envelope's own choke -- see playGuitarChug's
+  // own comment. 1.0 would be a true no-op (no choke at all, the old
+  // single-decay shape); the factory default genuinely chokes.
+  guitarChokeAmount: 0.18,
+  guitarChokeFraction: 0.12,
   guitarDuckAmount: 0.3,
   guitarDuckPulseFraction: 0.25,
+  // The real sidechain the owner asked for, in the direction that
+  // actually serves "chug and hypnotic, powerful force": the DRONE ducks
+  // for the GUITAR (see _duckDroneForGuitar), not the reverse -- every
+  // real chug briefly makes room for itself in the shared low end, then
+  // the drone swells back. Same shape as guitarDuckAmount/PulseFraction,
+  // just naming which voice the duck lives on.
+  // REVISED after a real measured headroom check: at 0.35, the duck
+  // window (a fraction of one chug's own short duration) fully released
+  // well before the NEXT chug at djent-speed subdivision, so the drone
+  // spent most of a busy passage back at its full resting level anyway --
+  // the sidechain only ever shaved the instant of each individual hit,
+  // never the sustained passage. Real sidechain compression sets its
+  // release close to the rhythmic INTERVAL it's ducking against (the
+  // "pumping" effect), not just the transient -- raised so the duck
+  // window approaches a full chug-length gap, keeping the low end
+  // genuinely handed to the guitar for the length of a busy passage, not
+  // flickering per hit. Depth raised to match.
+  droneDuckAmount: 0.55,
+  droneDuckPulseFraction: 0.85,
 };
 
 // Defaults exported so a "factory default" preset can always be reconstructed
@@ -418,9 +478,19 @@ export const DEFAULT_DRONE_PARAMS = {
   droneGrowlF1Hz: 110,
   droneGrowlF2Hz: 580,
   droneGrowlQ: 2.2,
-  droneGrowlWanderHz: 0.35,
-  droneGrowlWanderDepth: 35,
-  droneGrowlSaturationAmount: 0.14,
+  // "Meandering fry layer of drone" -- a small, deliberate bump to both
+  // the wander (slower, wider -- more genuinely meandering rather than a
+  // quick wobble) and the saturation (a touch more roughness/fry
+  // character), while staying well inside the real, already-established
+  // "swings symmetrically around droneGrowlF1Hz without going negative"
+  // safety margin (110 - 40 = 70, still comfortably positive) -- a
+  // tuning nudge, not a new mechanism. 40, not some other nearby number,
+  // because the UI slider's own step (5) must evenly divide it -- the
+  // known "silently snaps on load" bug class this project has hit twice
+  // before.
+  droneGrowlWanderHz: 0.28,
+  droneGrowlWanderDepth: 40,
+  droneGrowlSaturationAmount: 0.19,
   // "I'd like our instrument to be able to reach from the lowest ranges of
   // guttural human throat singing... to a comfortable male singing range."
   // The synthesized "throat voice" (see THROAT_HARMONICS) -- amount is the
@@ -2674,9 +2744,16 @@ export class OrphographAudio {
   // `ring` colors THIS event -- pan position and a small detune-spread
   // nudge -- layered on top of the shared this.noteParams; omitted (MIDI's
   // own call site) leaves the voice centered/unnudged exactly as before.
-  playNote(hz, { duration = 1.1, bend = 0, velocity = 1, ring } = {}) {
+  // `atTime` -- schedules against a caller-given AudioContext time instead
+  // of always `ctx.currentTime`, the same addition playPercussionHit/
+  // playGuitarChug already have -- needed so the pattern engine's own
+  // high-register chirp layer (main.js's onPulse) can land its ghost-tier
+  // hits at the exact same sub-pulse offset as everything else scheduled
+  // in that loop. `null` (the default) preserves the exact old behavior
+  // for every existing call site.
+  playNote(hz, { duration = 1.1, bend = 0, velocity = 1, ring, atTime = null } = {}) {
     const ctx = this.ensureContext();
-    const t0 = ctx.currentTime;
+    const t0 = atTime != null ? atTime : ctx.currentTime;
     const p = this.noteParams;
     // The kalimba's own authored register -- see foldIntoRange. Applied
     // here, once, so every call site (origin ping, melody/chord hits, the
@@ -3045,19 +3122,20 @@ export class OrphographAudio {
   // The per-event "chug" voice -- built fresh, dies with the note, fired
   // INTO the persistent rig above (the hybrid shape neither the kalimba
   // nor the drone/flute individually are -- a persistent amp, cheap
-  // per-event voices). Two detuned sawtooths (the deliberate, labeled
-  // exception -- see DEFAULT_GUITAR_PARAMS' own comment) plus a
-  // sub-octave doubling layer for the "bass" half, all through the SAME
-  // highpass as everything else, so the sub layer's own fundamental is
-  // attenuated there and its 2nd harmonic reinforces the main voice's
-  // fundamental instead of competing as independent sub-bass. `chugSec`/
-  // `attackFraction` are ALWAYS handed in by the caller (main.js), never
-  // recomputed here from pulse rate -- the exact same "main.js computes
-  // timing, synth.js only shapes the envelope" split playNote's own
-  // `duration` parameter already establishes. `letRing` (structural
-  // punctuation -- reversals/convergence/breath) sustains far longer, an
-  // open chord instead of a muted chug.
-  playGuitarChug(ring, hz, { velocity = 1, atTime = null, chugSec = 0.3, attackFraction = 0.06, letRing = false } = {}) {
+  // per-event voices). Two detuned unison voices -- one sawtooth, one
+  // SQUARE (the deliberate, labeled exception -- see DEFAULT_GUITAR_PARAMS'
+  // own comment) -- plus a sub-octave doubling layer for the "bass" half,
+  // all through the SAME highpass as everything else, so the sub layer's
+  // own fundamental is attenuated there and its 2nd harmonic reinforces
+  // the main voice's fundamental instead of competing as independent
+  // sub-bass. `chugSec`/`attackFraction` are ALWAYS handed in by the
+  // caller (main.js), never recomputed here from pulse rate -- the exact
+  // same "main.js computes timing, synth.js only shapes the envelope"
+  // split playNote's own `duration` parameter already establishes.
+  // `letRing` (structural punctuation -- reversals/convergence/breath, or
+  // a breakdown lap's own unison hit) sustains far longer, an open chord
+  // instead of a muted chug, and skips the choke stage below entirely.
+  playGuitarChug(ring, hz, { velocity = 1, atTime = null, chugSec = 0.3, attackFraction = 0.04, letRing = false } = {}) {
     const ctx = this.ensureContext();
     const rig = this._ensureGuitarRig();
     const gp = this.guitarParams;
@@ -3066,36 +3144,52 @@ export class OrphographAudio {
     const sustainSec = letRing ? Math.max(chugSec, 1) : chugSec;
     const stopAt = t0 + sustainSec + 0.15;
 
+    // The real sidechain -- "sidechaining it or overriding it" -- the
+    // drone yields to every real chug, unconditionally, regardless of
+    // which caller actually played it (the pattern engine, a let-ring
+    // punctuation event, a breakdown unison hit). See its own comment.
+    this._duckDroneForGuitar(chugSec);
+
     const pan = { given: -0.5, received: 0, made: 0.5 }[ring] ?? 0;
     const panner = ctx.createStereoPanner();
     panner.pan.value = pan;
     panner.connect(rig.input);
 
-    // The palm-mute envelope -- owned EXCLUSIVELY by this one event, same
-    // "one AudioParam, one owner" discipline as every other per-hit gate
-    // in this file. Fast attack, exponential decay, no sustain -- the
-    // SAME shape playNote's own kalimba envelope already uses, which
-    // already reads as a struck/muted voice, not a swell.
+    // The palm-mute envelope -- TWO stages, not one smooth decay, because
+    // that IS the actual acoustic mechanism of a palm mute: the hand
+    // chokes the string almost immediately after the pick attack, well
+    // before any natural decay would finish on its own. "What I'm
+    // hearing... is more like a wimpy palm mute" -- a single exponential
+    // fade, however short, reads as a synth envelope, never a real choke;
+    // this fixes it at the mechanism level rather than by shortening the
+    // old curve further. Fast attack -> peak -> a QUICK drop to a low
+    // choked floor (velocity * guitarChokeAmount) partway through the
+    // chug -> the existing release to silence. Skipped entirely for a
+    // `letRing` event -- nothing chokes a sustained, ringing chord.
     const voiceGain = ctx.createGain();
-    const attackSec = Math.max(0.002, sustainSec * attackFraction);
+    const attackSec = Math.max(0.001, sustainSec * attackFraction);
     voiceGain.gain.setValueAtTime(0.0001, t0);
     voiceGain.gain.linearRampToValueAtTime(velocity, t0 + attackSec);
+    if (!letRing && gp.guitarChokeAmount < 1) {
+      const chokeAt = t0 + attackSec + Math.max(0.002, sustainSec * gp.guitarChokeFraction);
+      voiceGain.gain.exponentialRampToValueAtTime(Math.max(0.0001, velocity * gp.guitarChokeAmount), chokeAt);
+    }
     voiceGain.gain.exponentialRampToValueAtTime(0.0001, stopAt);
     voiceGain.connect(panner);
 
     const detune = gp.guitarDetuneCents;
-    for (const cents of [-detune / 2, detune / 2]) {
+    ["sawtooth", "square"].forEach((type, i) => {
       const osc = ctx.createOscillator();
-      osc.type = "sawtooth";
+      osc.type = type;
       osc.frequency.value = foldedHz;
-      osc.detune.value = cents;
+      osc.detune.value = i === 0 ? -detune / 2 : detune / 2;
       const oscGain = ctx.createGain();
       oscGain.gain.value = 0.4;
       osc.connect(oscGain);
       oscGain.connect(voiceGain);
       osc.start(t0);
       osc.stop(stopAt + 0.05);
-    }
+    });
 
     if (gp.guitarSubAmount > 0) {
       const sub = ctx.createOscillator();
@@ -3145,6 +3239,30 @@ export class OrphographAudio {
     g.cancelScheduledValues(t0);
     g.setValueAtTime(g.value, t0); // hold current position first -- avoids a jump if a prior duck hasn't fully released yet
     g.linearRampToValueAtTime(1 - gp.guitarDuckAmount, t0 + duckSec * 0.15);
+    g.setTargetAtTime(1, t0 + duckSec * 0.15, duckSec * 0.4);
+  }
+
+  // The real sidechain the owner asked for -- "sidechaining it or
+  // overriding it to an extent" -- run in the direction that actually
+  // serves "chug and hypnotic, powerful force": the DRONE ducks for the
+  // GUITAR, on every real chug, not the reverse. Same shape as
+  // _duckGuitar's own kick-triggered duck (own dedicated gain node, own
+  // exclusive writer), timed off THIS chug's own duration (`chugSec`)
+  // rather than borrowing a specific ring's pulse rate -- the guitar can
+  // follow any of the three rings (main.js's guitarFollowsRing), so its
+  // own event duration is the one timing reference that's always real
+  // regardless of which ring is driving it. No-ops if the drone isn't
+  // currently on (most chugs happen while it is, but this must never
+  // assume so).
+  _duckDroneForGuitar(chugSec = 0.3) {
+    if (!this.droneOn || !this.droneVoices || !this.ctx) return;
+    const gp = this.guitarParams;
+    const t0 = this.ctx.currentTime;
+    const duckSec = Math.max(0.05, chugSec) * gp.droneDuckPulseFraction;
+    const g = this.droneVoices.droneDuckGain.gain;
+    g.cancelScheduledValues(t0);
+    g.setValueAtTime(g.value, t0); // hold current position first -- avoids a jump if a prior duck hasn't fully released yet
+    g.linearRampToValueAtTime(1 - gp.droneDuckAmount, t0 + duckSec * 0.15);
     g.setTargetAtTime(1, t0 + duckSec * 0.15, duckSec * 0.4);
   }
 
@@ -3578,9 +3696,20 @@ export class OrphographAudio {
       bassBoost.frequency.value = dp.bassBoostHz;
       bassBoost.gain.value = dp.bassBoostDb;
 
+      // The guitar's own sidechain target -- "sidechaining it or
+      // overriding it to an extent." Owned EXCLUSIVELY by
+      // _duckDroneForGuitar (see its own comment), the same "one
+      // AudioParam, one owner" discipline every other per-hit gate in
+      // this file follows -- inserted right at the drone's own final
+      // exit point so it ducks the WHOLE drone voice (fundamental,
+      // growl, throat, everything), not just one layer of it.
+      const droneDuckGain = ctx.createGain();
+      droneDuckGain.gain.value = 1;
+
       formantBlend.connect(moveFilter);
       moveFilter.connect(bassBoost);
-      bassBoost.connect(this._chanDrone);
+      bassBoost.connect(droneDuckGain);
+      droneDuckGain.connect(this._chanDrone);
 
       // Flute -- "one meandering flute drone/pad/melodic narrative," ONE
       // voice now (was three genuinely independent pipes, one per ring --
@@ -3756,7 +3885,7 @@ export class OrphographAudio {
       this.droneVoices = {
         bus, oscs, ringGain, sub, subGain, droneSaturator,
         voiceLfo, voiceLfoDepth, vibratoLfo, vibratoDepth,
-        noiseSources, noiseGain, f1, f2, formantBlend, moveFilter, filterLfo, filterLfoDepth, bassBoost,
+        noiseSources, noiseGain, f1, f2, formantBlend, moveFilter, filterLfo, filterLfoDepth, bassBoost, droneDuckGain,
         droneGrowlF1, droneGrowlF2, droneGrowlF1Gain, droneGrowlF2Gain,
         droneGrowlSaturatorF1, droneGrowlSaturatorF2,
         droneGrowlWanderLfo1, droneGrowlWanderLfo2, droneGrowlWanderDepth1, droneGrowlWanderDepth2,

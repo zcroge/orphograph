@@ -114,17 +114,42 @@ export function tierLetterCount(trace, ring) {
 // live spoke position directly, so step 0 of every pattern is genuinely
 // the ring standing on spoke 1); the pattern itself is anchored to the
 // phrase's own declared root. Two real anchors, not one arbitrary one.
+// `polyFine`/`polyN` -- real polymeter, not maximal evenness, for the
+// heaviest intensity. "The current intense beat comes across as more
+// drum-and-bass... not djent" -- E(k,n) at large k approaches even
+// 16th-note spacing, a breakbeat signature, not a metal one. Real
+// Meshuggah-style rhythm is instead built from an ODD-LENGTH repeating
+// cell cycling against the fixed pulse, realigning only every so many
+// bars -- this engine already has the exact right tool for that sitting
+// unused: wheel.js's own gcd/lcm machinery, already used for
+// GRAND_CONVERGENCE_PULSES's isorhythmic realignment. `polyN = n + 1`
+// (never n-1, which could reach 0) -- consecutive integers are ALWAYS
+// coprime, so gcd(n, polyN) = 1 always, which means (a) the realignment
+// period is the maximum possible, lcm(n, polyN) = n * polyN, and (b) the
+// polymetric cell visits every possible phase relationship against the
+// grid before it repeats -- the real "takes many bars to come back
+// around" quality real polymeter has, guaranteed by construction rather
+// than picked by ear. Same k-scaling logic as `fine`, just against
+// `polyN` instead of `n`. Consumed by a PERSISTENT, continuously
+// incrementing cursor (main.js's own polymetricCursor -- deliberately
+// NOT derived from the wheel's own per-lap spoke position the way `fine`
+// is, since the entire point is that this cell does NOT reset when the
+// wheel wraps back to spoke 1).
 export function patternsForRing(trace, ring, rootSpoke, subdivision = 1) {
   const s = Math.max(1, Math.min(4, Math.round(subdivision)));
   const statRing = Math.max(1, Math.min(SPOKE_COUNT, tierLetterCount(trace, ring)));
   const n = SPOKE_COUNT * s;
   const kFine = Math.max(1, Math.min(n, statRing * s));
   const rotation = normalizeSpoke(rootSpoke) - 1;
+  const polyN = n + 1;
+  const kPoly = Math.max(1, Math.min(polyN, statRing * s));
   return {
     n,
     s,
     coarse: rotatePattern(euclid(statRing, SPOKE_COUNT), rotation),
     fine: rotatePattern(euclid(kFine, n), rotation * s),
+    polyN,
+    polyFine: rotatePattern(euclid(kPoly, polyN), rotation * s),
   };
 }
 
@@ -140,8 +165,17 @@ export function patternsForRing(trace, ring, rootSpoke, subdivision = 1) {
 // bare onset RATIO stayed constant across subdivisions (see
 // patternsForRing) still read as busier at higher subdivision: the accent
 // structure genuinely differs even when the ratio doesn't.
-export function velocityForStep(step, s, coarse) {
-  if (step % (PULSES_PER_BEAT * s) === 0) return "accent";
+//
+// `halfTime` -- a real, named genre technique: at the heaviest moments, a
+// metal rhythm section's FELT kick/snare grid halves (hits land twice as
+// far apart) even though the underlying pulse hasn't slowed at all --
+// reading as heavier and more guttural rather than merely faster. Doubles
+// the accent spacing; the coarse/ghost tiers are untouched, so the
+// underlying pattern still reads as busy, just with the metric "downbeat"
+// landing half as often.
+export function velocityForStep(step, s, coarse, halfTime = false) {
+  const accentEvery = PULSES_PER_BEAT * s * (halfTime ? 2 : 1);
+  if (step % accentEvery === 0) return "accent";
   if (coarse.length && coarse[Math.floor(step / s) % coarse.length]) return "normal";
   return "ghost";
 }

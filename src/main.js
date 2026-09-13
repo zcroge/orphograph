@@ -616,6 +616,14 @@ function checkSeriesClosed() {
   view.resetCycleReadoutSeries();
   seriesStartPulse += seriesTotalMasterPulses; // advance by the exact interval just closed, not "now" -- keeps long sessions from drifting
   recomputeSeriesTotalPulses(); // the trace/step-size may have changed since this series began
+  // A real breakdown -- "djent breakdowns are a real STRUCTURAL moment,"
+  // tied to an event this engine already tracks discretely, not another
+  // continuous intensity increment. The series closing IS that moment;
+  // only fires at the arc's own top stage (a breakdown is specifically a
+  // maximal-intensity device). Cleared at the NEXT given-ring lap
+  // completion (onTraceLoop's own "given" branch), so it always lasts
+  // exactly one lap.
+  if (lastArcStage === ARC_STAGES.length - 1) breakdownActive = true;
 }
 
 // The Euclidean pattern engine's own per-ring patterns (src/rhythm.js) --
@@ -645,6 +653,26 @@ let guitarFollowsRing = "given";
 // guitar isn't tied to real geometric hits, see onPulse's own comment) --
 // reset once per Play so a fresh phrase always starts its own riff fresh.
 let guitarLetterCursor = 0;
+
+// Real polymeter's own persistent cursor (src/rhythm.js's polyFine/polyN)
+// -- deliberately module-level state, NOT derived from the wheel's own
+// per-lap spoke position, since the entire point is that this position
+// does NOT reset when the wheel wraps back to spoke 1 (see onPulse's own
+// comment). Only the given ring uses this today. Reset on Play (a fresh
+// phrase starts its own polymetric drift fresh, same reasoning as every
+// other Play-scoped reset here).
+const polymetricCursor = { given: 0, received: 0, made: 0 };
+
+// A real breakdown -- "half-time, breakdown" -- a discrete, one-lap-long
+// override of the given ring's own pattern, not a continuous intensity
+// state. Set true the moment a transposition series closes while the arc
+// is at its top stage (see checkSeriesClosed); cleared the NEXT time the
+// given ring completes a lap (onTraceLoop's own "given" branch, already
+// firing once per lap) -- so a breakdown always lasts exactly one given-
+// ring lap, a real, already-meaningful unit in this engine, never a
+// hand-picked duration.
+let breakdownActive = false;
+
 // Real bug, root cause of "instant jumps": advanceTransposition used to
 // glide directly between two WRAPPED (0-11) offsets. Whenever
 // old+step >= 12, the wrapped `newOffset` can be numerically LESS than
@@ -807,6 +835,13 @@ const sequencer = new Sequencer({
   // advanceTransposition's own comment for why this ring specifically.
   onTraceLoop: (ring) => {
     if (ring === "given") {
+      // A breakdown lasts exactly one given-ring lap -- clear it here,
+      // the given ring's own real "one lap just completed" event, before
+      // anything else this branch does. If checkSeriesClosed sets it
+      // again below (a fresh top-stage series just closed), the NEXT lap
+      // becomes its own breakdown -- back to back breakdowns are a real
+      // possibility, not a bug, for a long enough top-stage performance.
+      breakdownActive = false;
       // "The rotating rim should... only advance/rotate to its new
       // transpose state/offset on the transpose or given step" -- one full
       // pass of the given ring IS that step. Steps by the real
@@ -879,18 +914,67 @@ const sequencer = new Sequencer({
     if (percussionPatternMode === "euclid" || percussionPatternMode === "woven") {
       const pattern = currentPatterns[ring];
       if (pattern) {
+        const stage = Math.max(0, lastArcStage);
+        const stageDef = ARC_STAGES[stage];
         const pulseSec = 1 / ringPulsesPerSecond(ring);
         const now = audio.ctx ? audio.ctx.currentTime : 0;
+
+        // A real breakdown -- "fewer, heavier, more syncopated hits...
+        // guitar plays every surviving onset in rhythmic unison with the
+        // kick." A genuine structural EVENT (see checkSeriesClosed's own
+        // trigger and onTraceLoop's own clear), not a continuous
+        // intensity increment -- overrides the normal pattern entirely,
+        // for one given-ring lap, on the given ring only (received/made
+        // keep their own normal patterns; a breakdown is specifically a
+        // kick+guitar moment). Reads the COARSE grid directly (ignoring
+        // subdivision/polymeter) -- fewer onsets, not more, is the actual
+        // character of a breakdown.
+        if (breakdownActive && ring === "given") {
+          if (pattern.coarse[(spoke - 1) % SPOKE_COUNT]) {
+            audio.playPercussionHit(ring, { accent: true, atTime: now });
+            const chugSec = pulseSec * audio.guitarParams.guitarChugTightness;
+            audio.playGuitarChug(ring, hzForSpoke(transposedSpoke(currentRootSpoke)), {
+              velocity: 1,
+              atTime: now,
+              chugSec,
+              attackFraction: audio.guitarParams.guitarChugAttackFraction,
+            });
+          }
+          return;
+        }
+
+        // Real polymeter, not maximal evenness, at the top stage --
+        // src/rhythm.js's own polyFine/polyN (n+1, always coprime with n
+        // by construction). Consumed via a PERSISTENT cursor, deliberately
+        // independent of the wheel's own per-lap spoke position (`step`
+        // below) -- the whole point is that this cell does NOT reset when
+        // the wheel wraps back to spoke 1, so it genuinely phases against
+        // the beat lap over lap, the real Meshuggah-style riff-cycling
+        // device. Only the given ring gets this (the ring the guitar
+        // follows by default), so the guitar's own riff is what actually
+        // phases. Advances every sub-step regardless of whether polymeter
+        // is currently engaged, so toggling it on/off never causes a
+        // discontinuity in its own running phase.
+        const usePolymeter = ring === "given" && stageDef.polymeter;
         for (let j = 0; j < pattern.s; j++) {
           const step = (spoke - 1) * pattern.s + j;
-          if (!pattern.fine[step % pattern.n]) continue;
+          let onset;
+          if (ring === "given") {
+            onset = usePolymeter
+              ? pattern.polyFine[polymetricCursor.given % pattern.polyN]
+              : pattern.fine[step % pattern.n];
+            polymetricCursor.given += 1;
+          } else {
+            onset = pattern.fine[step % pattern.n];
+          }
+          if (!onset) continue;
           // Bypasses the density accumulator entirely (via `accent`/
           // `velocity`, both already-existing gate escape hatches) --
           // "one onset, one decider": a pattern-decided onset already went
           // through its own real decision process and is not an
           // independent resultant-rhythm event for the density arc to
           // ALSO thin.
-          const tier = velocityForStep(step, pattern.s, pattern.coarse);
+          const tier = velocityForStep(step, pattern.s, pattern.coarse, stageDef.halfTime);
           const atTime = now + (j * pulseSec) / pattern.s;
           if (tier === "accent") audio.playPercussionHit(ring, { accent: true, atTime });
           else audio.playPercussionHit(ring, { velocity: tier === "ghost" ? GHOST_VELOCITY : 1, atTime });
@@ -901,11 +985,11 @@ const sequencer = new Sequencer({
           // percussion pattern above, on whichever ring guitarFollowsRing
           // names (default given, the kick's own ring) -- not by raw
           // geometric hits, which would just duplicate the kalimba's own
-          // shape. `ARC_STAGES[lastArcStage].guitar` gates both WHETHER
-          // it plays at all ("off") and whether only accents sound
-          // ("pedal"/"pedal+letring") or every onset does ("riff").
+          // shape. `stageDef.guitar` gates both WHETHER it plays at all
+          // ("off") and whether only accents sound ("pedal"/
+          // "pedal+letring") or every onset does ("riff").
           if (ring === guitarFollowsRing) {
-            const guitarBehavior = ARC_STAGES[Math.max(0, lastArcStage)].guitar;
+            const guitarBehavior = stageDef.guitar;
             const playsThisOnset = guitarBehavior === "riff" || (guitarBehavior !== "off" && tier === "accent");
             if (playsThisOnset) {
               // Accented onsets spell the current word across the bar (a
@@ -929,6 +1013,29 @@ const sequencer = new Sequencer({
                 attackFraction: audio.guitarParams.guitarChugAttackFraction,
               });
             }
+          }
+          // A high-register chirp/glitch layer -- "the same kalimba
+          // register... same modal and rhythmic/melodic principles." No
+          // new synthesis: the made ring's own ghost-tier fill (the
+          // fine-grid-only texture, the sparsest of the three tiers)
+          // fires a short, quiet EXISTING kalimba hit, through the SAME
+          // hzForSpoke(transposedSpoke(...)) pitch path every other real
+          // note already uses -- automatically modally consistent. A
+          // short negative bend gives it the quick pitch-dip "chirp"/
+          // pinch-harmonic character real djent ornamentation has,
+          // distinguishing it from an ordinary melodic kalimba hit. Only
+          // once the arc has actually earned some intensity (driving/
+          // djent) -- a monastic/processional performance stays exactly
+          // as quiet as it already was -- and never during a breakdown,
+          // which is deliberately stark, not ornamented.
+          if (ring === "made" && tier === "ghost" && stageDef.chirp && !breakdownActive) {
+            audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER.made, {
+              duration: 0.05,
+              velocity: 0.4,
+              bend: -2,
+              ring: "made",
+              atTime,
+            });
           }
         }
       }
@@ -1613,6 +1720,8 @@ $("play").addEventListener("click", () => {
     // confirms and re-applies this for real; the manual stage otherwise).
     recomputeRhythmPatterns(subdivisionForStage(Math.max(0, lastArcStage)));
     guitarLetterCursor = 0;
+    polymetricCursor.given = polymetricCursor.received = polymetricCursor.made = 0;
+    breakdownActive = false;
     // Master hull -- the whole phrase's own shape (every non-rest letter,
     // in order, regardless of which ring ends up voicing it), so a word
     // whose letters disperse across all three tiers still shows a real
@@ -2479,4 +2588,3 @@ $("vibe-preset").addEventListener("change", (e) => applyVibePreset(e.target.valu
 // above) and outright misleading for any future per-frame visual math.
 // tickRate() self-schedules from module load, so nothing is lost by
 // removing this second driver.
-

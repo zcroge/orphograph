@@ -44,11 +44,16 @@ export const ARC_STAGE_COUNT = SPOKE_COUNT / PULSES_PER_BEAT;
 // Subdivision and tierEmphasis are pure formulas (subdivisionForStage/
 // tierEmphasisForStage below); only the truly discrete choices (pattern
 // mode, per-ring performance mode, guitar behavior) need a table at all.
+// `halfTime`/`polymeter`/`chirp` are new, additive fields -- "not djent...
+// half-time, breakdown, and a high-register chirp layer." Only the top
+// stage gets them: half-time and true polymetric phasing (see rhythm.js's
+// own polyFine/polyN) are specifically HEAVY-intensity genre techniques,
+// not something a processional/driving passage should already sound like.
 export const ARC_STAGES = [
-  { name: "monastic", percussionPatternMode: "sparse", ringModes: { given: "melody", received: "melody", made: "melody" }, guitar: "off" },
-  { name: "processional", percussionPatternMode: "resultant", ringModes: { given: "melody", received: "melody", made: "melody" }, guitar: "pedal" },
-  { name: "driving", percussionPatternMode: "woven", ringModes: { given: "chordPluck", received: "melody", made: "arpeggio" }, guitar: "pedal+letring" },
-  { name: "djent", percussionPatternMode: "woven", ringModes: { given: "chordPluck", received: "arpeggio", made: "arpeggio" }, guitar: "riff" },
+  { name: "monastic", percussionPatternMode: "sparse", ringModes: { given: "melody", received: "melody", made: "melody" }, guitar: "off", halfTime: false, polymeter: false, chirp: false },
+  { name: "processional", percussionPatternMode: "resultant", ringModes: { given: "melody", received: "melody", made: "melody" }, guitar: "pedal", halfTime: false, polymeter: false, chirp: false },
+  { name: "driving", percussionPatternMode: "woven", ringModes: { given: "chordPluck", received: "melody", made: "arpeggio" }, guitar: "pedal+letring", halfTime: false, polymeter: false, chirp: true },
+  { name: "djent", percussionPatternMode: "woven", ringModes: { given: "chordPluck", received: "arpeggio", made: "arpeggio" }, guitar: "riff", halfTime: true, polymeter: true, chirp: true },
 ];
 
 export function subdivisionForStage(stage) {
