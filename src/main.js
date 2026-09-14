@@ -12,7 +12,7 @@ import { PictographKeyboard } from "./keyboard.js";
 import { CompactLegend } from "./compactLegend.js";
 import { pixelGlyphSVGMarkup } from "./glyphRender.js";
 import { patternsForRing, patternsForMotif, velocityForStep, GHOST_VELOCITY } from "./rhythm.js";
-import { deriveArc, arcIntensityAt, stageForIntensity, subdivisionForStage, tierEmphasisForStage, describeArc, ARC_STAGES, ARC_STAGE_COUNT, subsetsForTraversal, vocabularyOf, depthAt, describeTraversal, describeForm } from "./arc.js";
+import { deriveArc, arcIntensityAt, stageForIntensity, subdivisionForStage, tierEmphasisForStage, describeArc, ARC_STAGES, ARC_STAGE_COUNT, subsetsForTraversal, vocabularyOf, depthAt, describeTraversal, describeForm, formFunctionsOf, fitTihai } from "./arc.js";
 import { deriveMotifs, applyMotifOp } from "./motif.js";
 
 const $ = (id) => document.getElementById(id);
@@ -649,14 +649,9 @@ function checkSeriesClosed() {
   // just hold the form at its final, fully-developed state forever
   // instead of the form genuinely restarting with the new series.
   traversalCount = 0;
-  // A real breakdown -- "djent breakdowns are a real STRUCTURAL moment,"
-  // tied to an event this engine already tracks discretely, not another
-  // continuous intensity increment. The series closing IS that moment;
-  // only fires at the arc's own top stage (a breakdown is specifically a
-  // maximal-intensity device). Cleared at the NEXT given-ring lap
-  // completion (onTraceLoop's own "given" branch), so it always lasts
-  // exactly one lap.
-  if (lastArcStage === ARC_STAGES.length - 1) breakdownActive = true;
+  // The tihai fires at most once per series (see maybeTriggerCadence) --
+  // a fresh series means a fresh chance to land one.
+  tihaiFiredForSeries = false;
 }
 
 // The Euclidean pattern engine's own per-ring patterns (src/rhythm.js) --
@@ -755,6 +750,123 @@ function developedSpokes(spokes) {
   return chain.reduce((t, step) => applyMotifOp(t, step), spokes.slice());
 }
 
+// The tihai's own target clock -- NOT grand convergence. The plan's own
+// original design targeted grand convergence (all three rings landing on
+// spoke 1 simultaneously), but a direct live test found that assumption
+// false for real typed content: grand convergence is only genuinely
+// periodic at GRAND_CONVERGENCE_PULSES for the DEGENERATE case where a
+// ring's own direction never reverses (verified directly -- a trivial
+// single-spoke-1 phrase converges exactly on schedule; a real multi-word
+// phrase with real direction reversals did not converge even once across
+// three full nominal periods of real playback). Direction is recomputed
+// at every hit (sequencer.js's own _directionToward), so a ring's spoke
+// position over time is a content-dependent WALK once tracing starts,
+// not a fixed-period sweep -- only the lead-in (a guaranteed, content
+// -independent free lap) is truly periodic.
+//
+// The transposition series boundary has no such problem: it's not a
+// coincidence to be observed, it's a THRESHOLD already computed exactly
+// from the trace's own real geometry (computeGivenLapRingPulses sums the
+// ACTUAL arc distances the given ring will travel, already accounting
+// for direction), and it's the exact clock every phase of this plan
+// already trusts (the arc's own period, and this phase's own traversal
+// counter). Landing the tihai here is also more musically coherent than
+// grand convergence would have been: the cadence resolves exactly as the
+// FORM's own cycle restarts, not at an unrelated astronomical event.
+//
+// Pulses remaining are ALWAYS exact (not predicted) -- checkSeriesClosed
+// itself fires from this identical subtraction, so there is no
+// prediction-drift risk here at all, unlike a scheme that tried to
+// forecast a future observed event.
+function pulsesRemainingInSeries() {
+  return seriesStartPulse + seriesTotalMasterPulses - sequencer.masterPulseCount;
+}
+
+// One cell, played as guitar+percussion in rhythmic unison -- the SAME
+// texture the breakdown already established ("guitar plays every
+// surviving onset in rhythmic unison with the kick"); a tihai-carrying
+// cadence IS a real breakdown, just one that's aimed at a destination
+// instead of merely triggered by reaching top stage. `renderedSpokes` is
+// already the form's own current chain applied (see maybeTriggerCadence)
+// -- the cadence reads the SAME developed motif every other voice does.
+function playCellUnison(ring, motif, renderedSpokes, startTime, durationSec) {
+  const onsetSteps = [];
+  for (let i = 0; i < SPOKE_COUNT; i++) if (motif.onsets[i]) onsetSteps.push(i);
+  if (onsetSteps.length === 0) onsetSteps.push(0);
+  const slotSec = durationSec / onsetSteps.length;
+  onsetSteps.forEach((_, i) => {
+    const atTime = startTime + i * slotSec;
+    const spoke = renderedSpokes[i % renderedSpokes.length];
+    audio.playPercussionHit(ring, { accent: true, atTime });
+    audio.playGuitarChug(ring, hzForSpoke(transposedSpoke(spoke)), {
+      velocity: 1,
+      atTime,
+      chugSec: slotSec * audio.guitarParams.guitarChugTightness,
+      attackFraction: audio.guitarParams.guitarChugAttackFraction,
+    });
+  });
+}
+
+// Schedules the real tihai -- three statements of the cadence word's own
+// cell, spaced so the third's final stroke lands exactly on the series
+// boundary (see pulsesRemainingInSeries/fitTihai). `fit.L` is already in
+// MASTER pulses (converted by the caller); everything here just walks
+// the AudioContext clock forward by `fit`'s own real gaps, once.
+function scheduleTihai(motif, fit) {
+  const masterPulseSec = 1 / sequencer.pulsesPerSecond;
+  const rendered = developedSpokes(motif.spokes);
+  let t = audio.ctx ? audio.ctx.currentTime : 0;
+  for (let i = 0; i < fit.reps; i++) {
+    const statementSec = fit.L * masterPulseSec;
+    playCellUnison("given", motif, rendered, t, statementSec);
+    t += statementSec;
+    if (i < fit.gaps.length) t += fit.gaps[i] * masterPulseSec;
+  }
+  // The breakdown's own existing visual/audio gates (onPulse's breakdown
+  // branch, the chirp layer's own !breakdownActive check) key off THIS
+  // flag -- "a breakdown is a cadence played loudly," so the cadence word
+  // reaching its own tihai IS the breakdown, not a separate condition.
+  // Cleared at the very next given-ring lap (onTraceLoop's own existing
+  // clear), same one-lap envelope breakdown already had.
+  breakdownActive = true;
+}
+
+// The one entry point, called from the given ring's own onWordChange:
+// "has the given ring just entered the phrase's own CADENCE word, on the
+// LAST traversal lap of the current series" -- the only circumstance
+// where firing a tihai timed against the series boundary makes musical
+// sense (fired on an earlier lap, `remaining` would span most of the
+// series, producing an absurdly slow, inaudible-as-a-figure "tihai").
+// `$("cadence").checked` is the owner's own manual override, same
+// "derived by default" convention as every other checkbox in this file.
+// Never fires twice in the same series (tihaiFiredForSeries), and NEVER
+// approximates -- fitTihai returning null (the cell genuinely doesn't
+// fit the remaining span) means silence, on purpose, per the design's
+// own "a mis-landed tihai is a worse outcome than no tihai at all."
+function maybeTriggerCadence(wordIndex) {
+  if (!$("cadence").checked || tihaiFiredForSeries) return;
+  const seriesLaps = transpositionCycleSteps(transpositionStepSpokes);
+  if (traversalCount !== seriesLaps - 1) return;
+  const labels = formFunctionsOf(currentMotifs);
+  if (labels[wordIndex] !== "CADENCE") return;
+  const motif = currentMotifs[wordIndex];
+  if (!motif) return;
+  // "Two cadences, one per pole -- a heavy phrase cadences by LANDING
+  // (the tihai); a light phrase should cadence by dissolving instead
+  // (a separate mechanism, not built this round -- see the plan doc)."
+  // Gated on the CADENCE WORD's own weight, not the arc's current live
+  // stage reading (which may not even correspond to this specific word)
+  // -- the same top-stage-only threshold the old breakdown mechanic
+  // already used, now measured from the actual word landing the cadence.
+  if (stageForIntensity(motif.weight) < ARC_STAGE_COUNT - 1) return;
+  const Lgiven = chordPulseLength(motif.entries);
+  const Lmaster = Math.max(1, Math.round(Lgiven / ringSpeedMultiplier("given")));
+  const fit = fitTihai(Lmaster, pulsesRemainingInSeries());
+  if (!fit) return;
+  tihaiFiredForSeries = true;
+  scheduleTihai(motif, fit);
+}
+
 // Which ring's own Euclidean pattern the guitar chugs on -- "kick-and-chug
 // locked together is genre-defining," so this defaults to `given` (the
 // kick's own ring), matching the pattern engine's own kick/snare/hat role
@@ -780,6 +892,15 @@ const polymetricCursor = { given: 0, received: 0, made: 0 };
 // ring lap, a real, already-meaningful unit in this engine, never a
 // hand-picked duration.
 let breakdownActive = false;
+// The tihai's own once-per-series guard -- reset in checkSeriesClosed
+// alongside traversalCount. Without this, re-entering the cadence word
+// on later (non-final) laps within the SAME series check would either
+// refire (if not gated on "final lap" at all) or, once gated, simply
+// never re-check since the final-lap condition itself only holds once
+// per series anyway -- this guard is the belt to that braid's suspenders,
+// making "at most one tihai per series" true by construction rather than
+// by the arithmetic happening to only line up once.
+let tihaiFiredForSeries = false;
 
 // Real bug, root cause of "instant jumps": advanceTransposition used to
 // glide directly between two WRAPPED (0-11) offsets. Whenever
@@ -1339,6 +1460,15 @@ const sequencer = new Sequencer({
     soundingEntries.forEach((entry) => {
       velocityBySpoke.set(entry.spoke, Math.max(velocityBySpoke.get(entry.spoke) || 0, entryVelocity(entry)));
     });
+    // Scheduled against the real AudioContext clock (`atTime`), not
+    // `setTimeout` -- the same main-thread-jitter fix already applied to
+    // the grace-note echoes and the Euclidean pattern engine's own onsets
+    // (see this file's own comment on that, further down). A tihai
+    // (a later phase's cadence device) has to land a scheduled note
+    // within milliseconds of a predicted pulse; `setTimeout` cannot
+    // survive main-thread jitter at that precision, so every remaining
+    // audio-scheduling site needed converting before that could be real.
+    const chordNow = audio.ctx ? audio.ctx.currentTime : 0;
     if (ringPerformanceMode[ring] === "arpeggio") {
       // Arpeggiate -- the SAME content and timing budget as chord pluck
       // (velocityBySpoke, durationSec), just spread across it as a real
@@ -1351,18 +1481,14 @@ const sequencer = new Sequencer({
       const ordered = orderArpeggioEntries([...velocityBySpoke.entries()], word, arpeggioDirection[ring]);
       const slotSec = durationSec / ordered.length;
       ordered.forEach(([spoke, velocity], i) => {
-        setTimeout(() => {
-          audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: Math.min(1.2, slotSec * 1.6), velocity, ring });
-        }, i * slotSec * 1000);
+        audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: Math.min(1.2, slotSec * 1.6), velocity, ring, atTime: chordNow + i * slotSec });
       });
     } else {
       // Chord pluck (and the safe default for any other value) -- a
       // small strum stagger between notes rather than a perfectly
       // simultaneous trigger, closer to how a real strum sounds.
       [...velocityBySpoke.entries()].forEach(([spoke, velocity], i) => {
-        setTimeout(() => {
-          audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: durationSec, velocity, ring });
-        }, i * 20);
+        audio.playNote(hzForSpoke(transposedSpoke(spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: durationSec, velocity, ring, atTime: chordNow + i * 0.02 });
       });
     }
     if (soundingEntries.length) {
@@ -1518,7 +1644,10 @@ const sequencer = new Sequencer({
     // the only ring that ever phases (see the invariant-layer rule,
     // rhythm.js's own patternsForMotif header), so it's the only one
     // whose talea/realignment figures mean anything to state.
-    if (ring === "given") updateIsorhythmReadout();
+    if (ring === "given") {
+      updateIsorhythmReadout();
+      maybeTriggerCadence(wordIndex);
+    }
   },
 });
 
@@ -1883,6 +2012,7 @@ $("play").addEventListener("click", () => {
     // happened to leave off.
     currentVocabulary = vocabularyOf(currentMotifs);
     traversalCount = 0;
+    tihaiFiredForSeries = false;
     lastFluteWordByRing.given = lastFluteWordByRing.received = lastFluteWordByRing.made = null;
     hullCursor.given = hullCursor.received = hullCursor.made = null;
     // The marquee's own "one revolution" clock -- a fresh phrase means a

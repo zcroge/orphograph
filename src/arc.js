@@ -428,3 +428,40 @@ export function formFunctionsOf(motifs) {
 export function describeForm(motifs) {
   return motifs.length ? formFunctionsOf(motifs).join(" > ") : "";
 }
+
+// The tihai -- a cell stated three times, spaced so the third statement's
+// final stroke lands exactly on a real cycle boundary. Arrival WITHOUT
+// stopping: sequencer.js's own law is that no ring ever halts, so this
+// is the Carnatic reconciliation -- a real destination the music aims at
+// while nothing actually stops moving.
+//
+// `L` and `remaining` are both in the SAME pulse unit (the caller's
+// choice; main.js uses master pulses, converting the given ring's own
+// talea via ringSpeedMultiplier first). `reps` statements of length `L`
+// each, with `reps-1` gaps between them, must sum to exactly `remaining`:
+// `reps*L + sum(gaps) === remaining`. Returns `null` -- never an
+// approximation -- when no non-negative-integer solution exists; the
+// caller simply does not fire rather than landing audibly wrong. An odd
+// leftover residue is absorbed into the FIRST gap (an unequal-gap tihai
+// is still a real tihai; Carnatic practice already allows it).
+export function fitCellToCycle(L, remaining, reps) {
+  if (!(L > 0) || !(reps > 0) || !(remaining >= 0)) return null;
+  const gapSlots = reps - 1;
+  const gapTotal = remaining - reps * L;
+  if (gapTotal < 0) return null; // doesn't fit -- caller may retry with a smaller L
+  if (gapSlots === 0) return gapTotal === 0 ? { L, reps, gaps: [] } : null;
+  const g = Math.floor(gapTotal / gapSlots);
+  const remainder = gapTotal - g * gapSlots;
+  const gaps = new Array(gapSlots).fill(g);
+  gaps[0] += remainder;
+  return { L, reps, gaps };
+}
+
+// The one entry point for a real tihai (reps=3): try the cell's own real
+// length first; if it doesn't fit the remaining span, try ONE diminution
+// (half the length, rounded up) before giving up. Never more than one
+// diminution -- a cell repeatedly halved until it happens to fit is not
+// a recognizable statement of the same idea anymore.
+export function fitTihai(L, remaining) {
+  return fitCellToCycle(L, remaining, 3) || fitCellToCycle(Math.max(1, Math.ceil(L / 2)), remaining, 3);
+}
