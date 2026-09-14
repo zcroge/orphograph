@@ -245,6 +245,16 @@ function deriveMotif(word, index) {
   const onsets = new Array(SPOKE_COUNT).fill(false);
   for (const s of pcSet) onsets[normalizeSpoke(s) - 1] = true;
 
+  // The real, UNWRAPPED melodic curve (see unfoldedOffsets below) is what
+  // reduceContour/contourClass need to read -- reducing the raw, mod-12
+  // `spokes` directly would manufacture false peaks/troughs at every
+  // octave wrap. Computed once here and attached to the Motif ("one
+  // motif, many readers") rather than recomputed by every future reader;
+  // PIK and TAK -- identical intervalVector/evenness/cardinality/weight,
+  // genuinely different gap sequences and contours -- are exactly the
+  // pair this was built to finally tell apart.
+  const unfolded = offsetsFromContourSteps(contour);
+
   return {
     index,
     entries: word,
@@ -255,6 +265,8 @@ function deriveMotif(word, index) {
     cardinality: pcSet.length,
     root: spokes[0],
     contour,
+    contourReduction: reduceContour(unfolded),
+    contourClass: contourClass(unfolded),
     intervalVector: intervalVector(pcSet),
     span: wordArc(word),
     handedness: wordHandedness(word),
@@ -265,6 +277,7 @@ function deriveMotif(word, index) {
     edge,
 
     onsets,
+    grouping: groupingFromOnsets(onsets),
     density: pcSet.length / SPOKE_COUNT,
     evenness: evenness(onsets),
   };
@@ -278,6 +291,261 @@ function deriveMotif(word, index) {
 // played, not just what was typed.
 export function deriveMotifs(words) {
   return words.map((w, i) => deriveMotif(w, i));
+}
+
+// A local max/min test shared by reduceContour and its helpers below --
+// plateau-tolerant (>=/<=, not strict >/<) and endpoint-inclusive (the
+// first and last CP of any contour are ALWAYS both a "max" and a "min" by
+// convention, matching Sampaio & Kroger 2016, "Contour Algorithms Review,"
+// MusMat vol.1 no.1, Algorithm 3 -- the citation this whole function is
+// built from; see the depth-counting note on reduceContour below for why
+// this project reads the PRIMARY source directly rather than the
+// commonly-repeated secondhand summary of it).
+function isContourMax(c, i) { if (i === 0 || i === c.length - 1) return true; return c[i] >= c[i - 1] && c[i] >= c[i + 1]; }
+function isContourMin(c, i) { if (i === 0 || i === c.length - 1) return true; return c[i] <= c[i - 1] && c[i] <= c[i + 1]; }
+
+// Steps 0-3 of Algorithm 3: repeatedly strip every CP that is not a local
+// max or min (endpoints always survive) until every surviving CP is one.
+function contourFirstPass(c0) {
+  let c = c0.slice();
+  let n = 0;
+  while (true) {
+    const flagged = c.map((_, i) => isContourMax(c, i) || isContourMin(c, i));
+    if (flagged.every(Boolean)) break;
+    c = c.filter((_, i) => flagged[i]);
+    n++;
+  }
+  return { c, n };
+}
+
+// Groups a list of ascending C-indices into maximal runs of *adjacent list
+// elements* sharing the same C-value (Algorithm 3 steps 6/7's "string of
+// equal and adjacent maxima/minima").
+function equalAdjacentRuns(list, c) {
+  const runs = [];
+  let run = [list[0]];
+  for (let k = 1; k < list.length; k++) {
+    if (c[list[k]] === c[list[k - 1]]) run.push(list[k]);
+    else { if (run.length > 1) runs.push(run); run = [list[k]]; }
+  }
+  if (run.length > 1) runs.push(run);
+  return runs;
+}
+
+// Resolves one list's (max-list or min-list) equal-adjacent runs (Algorithm
+// 3 steps 8/9): a run touching either true endpoint of the contour keeps
+// only that endpoint; otherwise a left-to-right pairwise sweep keeps a
+// member only when the OPPOSITE list has a member strictly between it and
+// its still-surviving predecessor (an intervening extremum earns the
+// plateau's redundant duplicate its keep; no intervening extremum drops
+// it). Verified against both of Schultz's own published counterexamples
+// (see reduceContour's own comment).
+function resolveContourRuns(list, c, betweenSet, firstIdx, lastIdx) {
+  const survivors = new Set(list);
+  for (const run of equalAdjacentRuns(list, c)) {
+    const hasFirst = run[0] === firstIdx;
+    const hasLast = run[run.length - 1] === lastIdx;
+    if (hasFirst || hasLast) {
+      for (const idx of run) if (idx !== firstIdx && idx !== lastIdx) survivors.delete(idx);
+      continue;
+    }
+    let cur = run[0];
+    for (let k = 1; k < run.length; k++) {
+      const next = run[k];
+      if (!survivors.has(cur)) { cur = next; continue; }
+      const hasBetween = betweenSet.some((b) => b > cur && b < next);
+      if (hasBetween) cur = next; else survivors.delete(next);
+    }
+  }
+  return survivors;
+}
+
+// Steps 4-16 (the "second part") of Algorithm 3: recompute max-/min-lists
+// fresh each outer pass, resolve their own equal-adjacent runs (above),
+// then Steps 10-13's global repeated-VALUE trim -- any still-flagged,
+// non-endpoint CP whose VALUE recurs elsewhere in the flagged set is
+// pooled, and only the pool member nearest the contour's front and the one
+// nearest its back survive (Step 12/13 reflags one dropped opposite-list
+// member if both survivors land on the same list, to keep a max/min
+// balance). Loops until every CP is flagged.
+function contourSecondPass(c0, nStart) {
+  let c = c0.slice();
+  let n = nStart;
+  while (true) {
+    const firstIdx = 0;
+    const lastIdx = c.length - 1;
+    const maxList = [];
+    const minList = [];
+    for (let i = 0; i < c.length; i++) {
+      if (isContourMax(c, i)) maxList.push(i);
+      if (isContourMin(c, i)) minList.push(i);
+    }
+    const maxSurv = resolveContourRuns(maxList, c, minList, firstIdx, lastIdx);
+    const minSurv = resolveContourRuns(minList, c, maxList, firstIdx, lastIdx);
+
+    const combinedIdx = new Set([...maxSurv, ...minSurv]);
+    const interior = [...combinedIdx].filter((i) => i !== firstIdx && i !== lastIdx);
+    const byValue = new Map();
+    for (const i of interior) {
+      if (!byValue.has(c[i])) byValue.set(c[i], []);
+      byValue.get(c[i]).push(i);
+    }
+    const repeatedPool = [];
+    for (const idxs of byValue.values()) if (idxs.length > 1) repeatedPool.push(...idxs);
+    if (repeatedPool.length > 0) {
+      repeatedPool.sort((a, b) => a - b);
+      const nearFront = repeatedPool[0];
+      const nearBack = repeatedPool[repeatedPool.length - 1];
+      for (const i of repeatedPool) {
+        if (i === nearFront || i === nearBack) continue;
+        maxSurv.delete(i);
+        minSurv.delete(i);
+      }
+      const frontMax = maxSurv.has(nearFront), backMax = maxSurv.has(nearBack);
+      const frontMin = minSurv.has(nearFront), backMin = minSurv.has(nearBack);
+      if (frontMax && backMax && !frontMin && !backMin) {
+        const dropped = repeatedPool.filter((i) => i !== nearFront && i !== nearBack && minList.includes(i));
+        if (dropped.length > 0) minSurv.add(dropped[0]);
+      } else if (frontMin && backMin && !frontMax && !backMax) {
+        const dropped = repeatedPool.filter((i) => i !== nearFront && i !== nearBack && maxList.includes(i));
+        if (dropped.length > 0) maxSurv.add(dropped[0]);
+      }
+    }
+
+    const finalFlagged = new Set([...maxSurv, ...minSurv]);
+    if (finalFlagged.size === c.length) return { prime: c, depth: n };
+    c = c.filter((_, i) => finalFlagged.has(i));
+    n = n === 0 ? n + 1 : n + 2;
+  }
+}
+
+function denseRank(c) {
+  const uniqueSorted = [...new Set(c)].sort((a, b) => a - b);
+  const rank = new Map(uniqueSorted.map((v, i) => [v, i]));
+  return c.map((v) => rank.get(v));
+}
+
+// Morris/Schultz contour reduction, corrected per Sampaio & Kroger 2016
+// ("Contour Algorithms Review," MusMat vol.1 no.1, Algorithm 3 -- read
+// directly from the primary source, not a secondhand paraphrase, precisely
+// because the two bugs it fixes are subtle enough that a paraphrase risks
+// reintroducing them). Repeatedly strips non-extrema and collapses
+// redundant plateaus/repeated pitch-levels until nothing more can be
+// removed, producing a `(prime, depth)` pair: `depth` is a real, if coarse,
+// complexity/hierarchy integer (how many passes a word's own melodic shape
+// takes to boil down to its skeleton), and `prime` is the surviving
+// 2-4-ish-element shape (dense-rank normalized to 0..k-1, Morris's own
+// CSEG convention).
+//
+// Takes a plain array of real-valued contour points -- pass
+// `unfoldedOffsets(motif)` (this file, below -- the real, UNWRAPPED
+// melodic curve), never `motif.spokes` directly:
+// spokes are mod-12 pitch classes, and reducing them raw would manufacture
+// FALSE peaks/troughs at every octave wrap, exactly the register-flat
+// artifact the unfolding fix exists to remove. Also usable, unmodified, on
+// any other real-valued contour this engine derives (a duration/IOI-gap
+// sequence, say -- Marvin 1991's d-space and Scotto 2016's distortion-space
+// are precedent for reusing the identical math on a non-pitch channel).
+//
+// Verified against the paper's own two published counterexamples for the
+// UNFIXED Schultz algorithm -- <1 2 0 2 0 1> (which the original wrongly
+// leaves unreduced; this implementation reduces it to <1 2 0 1>, depth 1)
+// and <1 2 2 0 2 1> (paper states the correct prime is <1 2 0 2 1>, which
+// this implementation reproduces exactly) -- and against the paper's own
+// long (13-CP) illustrative example, which reduces to the identical final
+// shape <1 3 0 3 1> the paper traces by hand. One honest caveat: the
+// paper's own hand-trace of that 13-CP example runs the UNFIXED algorithm
+// for illustration and reaches the same shape in 3 outer passes (depth 3);
+// this implementation's fix (closing exactly the conservatism bug the
+// paper's own abstract describes) reaches the identical shape in 1 pass.
+// The paper never re-traces this example under its OWN fixed algorithm, so
+// there is no authoritative depth to match here beyond the final shape --
+// disclosed rather than silently assumed correct.
+export function reduceContour(values) {
+  if (!values || values.length === 0) return { prime: [], rawPrime: [], depth: 0 };
+  if (values.length <= 2) return { prime: denseRank(values), rawPrime: values.slice(), depth: 0 };
+  const { c: afterFirst, n: n1 } = contourFirstPass(values);
+  const { prime, depth } = contourSecondPass(afterFirst, n1);
+  return { prime: denseRank(prime), rawPrime: prime, depth };
+}
+
+// CSEG (contour segment) prime form via Marvin & Laprade's equivalence
+// class, using Sampaio & Kroger's own brute-force-of-4 correction (their
+// Algorithm 5) rather than the original published 3-step test: the 3-step
+// version is proven to return two different "prime forms" for the same
+// equivalence class in 28 of 235 cataloged cseg-classes (their Table 3).
+// Generating all four Klein-group images (identity, retrograde, inversion,
+// retrograde-inversion) in contour-space and taking the lexicographically
+// smallest is exactly as cheap and provably correct on every class.
+// Verified against the paper's own Table 3 case (cseg-class 5-3): both
+// <0 1 3 2 4> and its RI-equivalent <0 2 1 3 4> resolve to the same
+// correct prime <0 1 3 2 4>, the case the 3-step algorithm gets wrong.
+export function contourClass(values) {
+  if (!values || values.length === 0) return [];
+  const norm = denseRank(values);
+  const k = norm.length;
+  const retro = [...norm].reverse();
+  const invertContour = (arr) => arr.map((v) => k - 1 - v);
+  const candidates = [norm, retro, invertContour(norm), invertContour(retro)];
+  candidates.sort((a, b) => {
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+    return 0;
+  });
+  return candidates[0];
+}
+
+// The onset gap sequence (hoisted out of evenness() above, which computed
+// this same circular spacing transiently and threw it away after reducing
+// it to one scalar) PLUS a real, non-arbitrary accent placement over it:
+// Povel & Essens' 1985 rule for accenting a bare onset/IOI sequence -- a
+// temporally isolated onset is accented; the SECOND of an isolated pair is
+// accented; the FIRST and LAST of a run of three-or-more consecutive
+// onsets are accented (interior run members are not). `onsets` is a
+// boolean[SPOKE_COUNT] (a Motif's own `onsets` field, or any 12-vector --
+// rhythm.js's own patterns are the same shape); the circle wraps, so a run
+// or an isolated onset spanning the 0/11 seam is handled the same as
+// anywhere else. Returns `{ gaps, accents }`, `accents` a
+// boolean[onsets.length] aligned to onset POSITIONS (not gap indices).
+export function groupingFromOnsets(onsets) {
+  const n = onsets.length;
+  const positions = [];
+  for (let i = 0; i < n; i++) if (onsets[i]) positions.push(i);
+  const k = positions.length;
+  const accents = new Array(n).fill(false);
+  if (k === 0) return { gaps: [], accents };
+  const gaps = positions.map((p, i) => {
+    const next = positions[(i + 1) % k];
+    const raw = (next - p + n) % n;
+    return raw === 0 ? n : raw;
+  });
+  if (k === 1) { accents[positions[0]] = true; return { gaps, accents }; }
+
+  // Partition positions into maximal circular runs of gap-1 (immediately
+  // adjacent) neighbors, starting from any position whose OWN preceding
+  // gap is > 1 (a real break in the ring) -- or, for a fully solid ring
+  // with no such break, an arbitrary start (the whole ring is one run).
+  const gapBefore = positions.map((_, i) => gaps[(i - 1 + k) % k]);
+  let startIdx = positions.findIndex((_, i) => gapBefore[i] > 1);
+  if (startIdx === -1) startIdx = 0;
+  const runs = [];
+  let current = [];
+  for (let step = 0; step < k; step++) {
+    const i = (startIdx + step) % k;
+    if (current.length === 0) current.push(i);
+    else {
+      const prevI = current[current.length - 1];
+      if (gaps[prevI] === 1) current.push(i);
+      else { runs.push(current); current = [i]; }
+    }
+  }
+  if (current.length) runs.push(current);
+
+  for (const run of runs) {
+    if (run.length === 1) accents[positions[run[0]]] = true; // isolated onset
+    else if (run.length === 2) accents[positions[run[1]]] = true; // second of an isolated pair
+    else { accents[positions[run[0]]] = true; accents[positions[run[run.length - 1]]] = true; } // first & last of a 3+ run
+  }
+  return { gaps, accents };
 }
 
 // Real, UNFOLDED register offsets, one per letter, from the word's own
@@ -309,12 +577,16 @@ export function deriveMotifs(words) {
 // folded to one octave) -- a caller combines this with a root Hz via
 // `rootHz * 2^(offset/SPOKE_COUNT)`, the same ratio-from-semitones
 // convention `voiceWord`'s own `ratio` field already uses.
-export function unfoldedOffsets(motif) {
+function offsetsFromContourSteps(contourSteps) {
   const offsets = [0];
   let cumulative = 0;
-  for (const step of motif.contour) {
+  for (const step of contourSteps) {
     cumulative += step;
     offsets.push(cumulative);
   }
   return offsets;
+}
+
+export function unfoldedOffsets(motif) {
+  return offsetsFromContourSteps(motif.contour);
 }
