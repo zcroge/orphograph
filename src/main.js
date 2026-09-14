@@ -13,7 +13,7 @@ import { CompactLegend } from "./compactLegend.js";
 import { pixelGlyphSVGMarkup } from "./glyphRender.js";
 import { patternsForRing, patternsForMotif, velocityForStep, GHOST_VELOCITY } from "./rhythm.js";
 import { deriveArc, arcIntensityAt, stageForIntensity, subdivisionForStage, tierEmphasisForStage, describeArc, ARC_STAGES, ARC_STAGE_COUNT, subsetsForTraversal, vocabularyOf, depthAt, describeTraversal, describeForm, formFunctionsOf, fitTihai } from "./arc.js";
-import { deriveMotifs, applyMotifOp } from "./motif.js";
+import { deriveMotifs, applyMotifOp, unfoldedOffsets } from "./motif.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -927,6 +927,31 @@ function transposedSpoke(spoke) {
   return transpositionEnabled ? rotateSpoke(spoke, transpositionOffsetSpokes) : spoke;
 }
 
+// The register fix -- "why melody has always been register-flat."
+// `hzForSpoke` (letters.js) is a 12-entry mod-12 lookup: every spoke maps
+// into exactly one octave, so a per-letter melodic hit has always
+// discarded which octave a word's own melodic shape actually implies (a
+// word whose letters climb five spokes, five spokes, five spokes never
+// climbs -- it wraps back down every step). `motif.js`'s
+// `unfoldedOffsets` (the cumulative sum of the word's own already
+// -computed `contour`, previously computed and never read again anywhere)
+// gives the REAL, unwrapped semitone path from the word's own root.
+// Combines that with the root's own (globally transposed) pitch --
+// transposition still shifts the whole word by the same real rotation,
+// applied once to the root, with the word's own melodic contour then
+// added on top as real, non-wrapped semitones. Falls back to the old
+// flat reading when no motif is available yet (a rest passed in by
+// mistake, or a call before Play has built motifOfEntry) -- same
+// defensive shape every other motif-reading call site in this file uses.
+function unfoldedHzForEntry(entry) {
+  const motif = motifOfEntry.get(entry);
+  if (!motif) return hzForSpoke(transposedSpoke(entry.spoke));
+  const index = motif.entries.indexOf(entry);
+  if (index < 0) return hzForSpoke(transposedSpoke(entry.spoke));
+  const offset = unfoldedOffsets(motif)[index];
+  return hzForSpoke(transposedSpoke(motif.root)) * Math.pow(2, offset / SPOKE_COUNT);
+}
+
 function advanceTransposition() {
   const newOffset = ((transpositionOffsetSpokes + transpositionStepSpokes) % 12 + 12) % 12;
   // Glide the UNWRAPPED accumulator (always +transpositionStepSpokes,
@@ -1382,7 +1407,7 @@ const sequencer = new Sequencer({
       triggerPercussion(ring, owned);
     }
     if (!target.isRest && velocity > 0) {
-      audio.playNote(hzForSpoke(transposedSpoke(target.spoke)) * RING_OCTAVE_MULTIPLIER[ring], { duration: 0.9, velocity, ring });
+      audio.playNote(unfoldedHzForEntry(target) * RING_OCTAVE_MULTIPLIER[ring], { duration: 0.9, velocity, ring });
       applyVowelFromLetters([target.letter]);
       keyboard.flash(target.letter);
       legendGrid.flash(target.letter);

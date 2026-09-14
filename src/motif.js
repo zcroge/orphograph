@@ -279,3 +279,42 @@ function deriveMotif(word, index) {
 export function deriveMotifs(words) {
   return words.map((w, i) => deriveMotif(w, i));
 }
+
+// Real, UNFOLDED register offsets, one per letter, from the word's own
+// first letter (its root) -- the cumulative sum of the word's own
+// `contour` (signedArcDistance between consecutive letters, already
+// computed above and, until this function, never read again anywhere).
+//
+// `hzForSpoke` (letters.js) is a 12-entry mod-12 lookup: every spoke maps
+// into exactly ONE octave, so every melodic voice that plays
+// `hzForSpoke(spoke)` per letter has always played a register-FLAT,
+// octave-wrapped line -- a word whose letters climb five spokes, five
+// spokes, five spokes does not climb; `signedArcDistance` always takes
+// the SHORTEST arc back toward the reference spoke, silently re-wrapping
+// every single step. Accumulating the word's own already-computed
+// step-by-step contour instead lets a melody that keeps climbing keep
+// climbing -- exactly the same per-step distances `wordArc` (trace.js)
+// already sums for an unrelated purpose (chord duration) without ever
+// folding them back down; this is that same real quantity, kept
+// per-step instead of summed to one total, and finally given a reader.
+//
+// Verified against this project's own canonical word: DOGMAN's letters
+// (spokes [5,7,9,2,10,5], contour [2,2,5,-4,-5]) unfold to real offsets
+// [0,2,4,9,5,0] -- a rising arch of a major sixth and back home -- where
+// the OLD per-letter `signedArcDistance(root, spoke)` reading would give
+// [0,2,4,-3,5,0], silently wrapping the word's own 4th letter down an
+// octave from where its actual melodic path actually goes.
+//
+// Returned offsets are in REAL semitones (not wrapped to +/-6, not
+// folded to one octave) -- a caller combines this with a root Hz via
+// `rootHz * 2^(offset/SPOKE_COUNT)`, the same ratio-from-semitones
+// convention `voiceWord`'s own `ratio` field already uses.
+export function unfoldedOffsets(motif) {
+  const offsets = [0];
+  let cumulative = 0;
+  for (const step of motif.contour) {
+    cumulative += step;
+    offsets.push(cumulative);
+  }
+  return offsets;
+}
