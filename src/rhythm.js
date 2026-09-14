@@ -272,8 +272,19 @@ export function patternsForMotif(motif, ring, subdivision = 1) {
   const polyN = talea * s; // fine-step-scaled, same resolution `n` is built at
   const kPoly = Math.max(1, Math.min(polyN, k * s));
 
+  // The word's own Povel & Essens accent placement (motif.js's own
+  // groupingFromOnsets, read off the motif's real onsets -- content, not
+  // metric position), carried through the SAME ring lens `coarse` itself
+  // just went through, so both stay in the same transformed coordinate
+  // space (a spoke this ring's own lens moved is accented at its NEW
+  // position, not its pre-lens one). Degrades to all-false, never throws,
+  // if a caller ever hands in a motif built without `grouping` (defensive
+  // only -- every real motif from deriveMotifs has it).
+  const motifAccents = applyRingLens(motif.grouping ? motif.grouping.accents : new Array(SPOKE_COUNT).fill(false), ring);
+
   return {
     n, s, coarse, fine,
+    motifAccents,
     polyN,
     polyFine: euclid(kPoly, polyN),
     talea,
@@ -310,9 +321,25 @@ export function patternsForMotif(motif, ring, subdivision = 1) {
 // the accent spacing; the coarse/ghost tiers are untouched, so the
 // underlying pattern still reads as busy, just with the metric "downbeat"
 // landing half as often.
-export function velocityForStep(step, s, coarse, halfTime = false) {
+//
+// `motifAccents` -- optional, `patternsForMotif`'s own content-derived
+// accent array (Povel & Essens, applied to the SAME ring-lensed coarse
+// grid this function already reads), UNIONED with the existing metric-
+// position accent rather than replacing it: either reason is enough to
+// earn the loudest tier, so a spoke that is BOTH a real coarse-grid onset
+// AND a content accent gets exactly the same "accent" treatment a metric
+// downbeat already did, closing the gap the Phase 3 postmortem found (a
+// metric accent could previously land on a spoke that isn't even a member
+// of the word's own onset set). Omitted (the old 4-argument call), this
+// function is byte-identical to before -- the union only ever ADDS accents,
+// never removes the metric ones.
+export function velocityForStep(step, s, coarse, halfTime = false, motifAccents = null) {
   const accentEvery = PULSES_PER_BEAT * s * (halfTime ? 2 : 1);
-  if (step % accentEvery === 0) return "accent";
-  if (coarse.length && coarse[Math.floor(step / s) % coarse.length]) return "normal";
+  const metricAccent = step % accentEvery === 0;
+  const coarseIndex = coarse.length ? Math.floor(step / s) % coarse.length : 0;
+  const isCoarseOnset = !!(coarse.length && coarse[coarseIndex]);
+  const contentAccent = !!(motifAccents && isCoarseOnset && motifAccents[coarseIndex]);
+  if (metricAccent || contentAccent) return "accent";
+  if (isCoarseOnset) return "normal";
   return "ghost";
 }

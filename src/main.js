@@ -690,11 +690,29 @@ let rhythmFollowsMotif = true;
 // ARC_STAGE_COUNT/PULSES_PER_BEAT this file already imports. Not
 // following: the old stage-driven formula, unchanged, feeding the OFF
 // path's own recomputeRhythmPatterns calls (see applyArcStage/Play).
+//
+// `contourReduction.depth` (motif.js) rides along as a real, separate
+// discriminator: two words of equal cardinality can still have different
+// reduction depths (PIK and TAK -- identical cardinality/weight/evenness,
+// genuinely different contours -- are the case this was built to tell
+// apart), and depth is added at the SAME unit weight as cardinality,
+// through the SAME divisor, rather than a fractional coefficient that
+// would itself be an undisclosed exception. One correction from the
+// plan's own literal prose, caught the same way Phase 1's register-fix
+// formula was: the plan's own `(cardinality + depth) / (2*PULSES_PER_BEAT)`
+// halves cardinality's established weight (verified by hand: at depth 0
+// this formula's own max cardinality, 12, only reaches subdivision 2, not
+// 4 -- the top stage becomes unreachable via motif-following at all).
+// This version is byte-identical to the old formula whenever depth is 0
+// (the common case for short/simple words), and only ever nudges the
+// result UP by adding a real, small, same-currency quantity on top --
+// "additive, not replacing," same as the accent union above.
 function currentSubdivision() {
   if (rhythmFollowsMotif) {
     const motif = currentMotifByRing.given;
     const cardinality = motif ? motif.cardinality : 1;
-    return Math.max(1, Math.min(ARC_STAGE_COUNT, Math.round(cardinality / PULSES_PER_BEAT)));
+    const depth = motif && motif.contourReduction ? motif.contourReduction.depth : 0;
+    return Math.max(1, Math.min(ARC_STAGE_COUNT, Math.round((cardinality + depth) / PULSES_PER_BEAT)));
   }
   return subdivisionForStage(Math.max(0, lastArcStage));
 }
@@ -1238,7 +1256,7 @@ const sequencer = new Sequencer({
           // through its own real decision process and is not an
           // independent resultant-rhythm event for the density arc to
           // ALSO thin.
-          const tier = velocityForStep(step, pattern.s, pattern.coarse, stageDef.halfTime);
+          const tier = velocityForStep(step, pattern.s, pattern.coarse, stageDef.halfTime, pattern.motifAccents);
           const atTime = now + (j * pulseSec) / pattern.s;
           if (tier === "accent") audio.playPercussionHit(ring, { accent: true, atTime });
           else audio.playPercussionHit(ring, { velocity: tier === "ghost" ? GHOST_VELOCITY : 1, atTime });
